@@ -3,26 +3,27 @@
 
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Vortext</title>
-    <style>
-        body {
-            width: 300px;
-            padding: 20px;
-            font-family: Arial, sans-serif;
-            text-align: center;
-            background-color: #1e1e1e;
-            color: white;
-        }
-
-        h1 {
-            color: #4CAF50;
-        }
-    </style>
+    <link rel="stylesheet" href="styles.css">
 </head>
 
 <body>
-    <h1>Vortext</h1>
-    <p>Ready to find subtitles!</p>
+    <div class="container">
+        <h1>🎬 Vortext</h1>
+        <p class="subtitle">Subtitle overlay for any video</p>
+
+        <div class="search-box">
+            <input type="text" id="searchInput" placeholder="Search movie or show..." autocomplete="off">
+            <button id="searchBtn">Search</button>
+        </div>
+
+        <div id="results" class="results">
+            <!-- Results will appear here -->
+        </div>
+    </div>
+
+    <script src="popup.js"></script>
 </body>
 
 </html>
