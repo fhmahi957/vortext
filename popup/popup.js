@@ -4,7 +4,7 @@ document.addEventListener('DOMContentLoaded', function () {
     const resultsDiv = document.getElementById('results');
 
     // ⚠️ REPLACE THIS WITH YOUR ACTUAL API KEY ⚠️
-    const API_KEY = 'UUm0DW8jfJjuQemQZ9JAIjhas86tAPUq';
+    const API_KEY = 'YOUR_API_KEY_HERE';
 
     searchBtn.addEventListener('click', performSearch);
     searchInput.addEventListener('keypress', function (e) {

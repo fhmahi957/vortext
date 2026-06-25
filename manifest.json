@@ -2,7 +2,7 @@
     "manifest_version": 3,
     "name": "Vortext",
     "version": "1.0",
-    "description": "Find subtitles on any video.",
+    "description": "Find subtitles for movies.",
     "action": {
         "default_popup": "popup/index.html",
         "default_title": "Vortext"
@@ -13,6 +13,18 @@
     ],
     "host_permissions": [
         "https://api.opensubtitles.com/*",
-        "https://dl.opensubtitles.com/*"
+        "https://dl.opensubtitles.com/*",
+        "<all_urls>"
+    ],
+    "content_scripts": [
+        {
+            "matches": [
+                "<all_urls>"
+            ],
+            "js": [
+                "content/content.js"
+            ],
+            "run_at": "document_idle"
+        }
     ]
 }
