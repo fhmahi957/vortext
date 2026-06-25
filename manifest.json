@@ -2,7 +2,7 @@
     "manifest_version": 3,
     "name": "Vortext",
     "version": "1.0",
-    "description": "Fetch and overlay subtitles on any video.",
+    "description": "Find subtitles on any video.",
     "action": {
         "default_popup": "popup/index.html",
         "default_title": "Vortext"
@@ -10,5 +10,9 @@
     "permissions": [
         "activeTab",
         "storage"
+    ],
+    "host_permissions": [
+        "https://api.opensubtitles.com/*",
+        "https://dl.opensubtitles.com/*"
     ]
 }
