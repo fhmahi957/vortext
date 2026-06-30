@@ -3,7 +3,6 @@ document.addEventListener('DOMContentLoaded', function () {
     const searchBtn = document.getElementById('searchBtn');
     const resultsDiv = document.getElementById('results');
 
-    // ⚠️ REPLACE THIS WITH YOUR ACTUAL API KEY ⚠️
     const API_KEY = 'YOUR_API_KEY_HERE';
 
     searchBtn.addEventListener('click', performSearch);
@@ -21,34 +20,55 @@ document.addEventListener('DOMContentLoaded', function () {
         resultsDiv.innerHTML = '<p style="color: #00d9ff; text-align: center;">Searching...</p>';
 
         try {
-            const response = await fetch(`https://api.opensubtitles.com/api/v1/subtitles?query=${query}&languages=en`, {
+            const url = `https://api.opensubtitles.com/api/v1/subtitles?query=${encodeURIComponent(query)}&languages=en`;
+
+            const response = await fetch(url, {
+                method: 'GET',
                 headers: {
                     'Api-Key': API_KEY,
-                    'Content-Type': 'application/json'
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/json'
                 }
             });
 
+            if (!response.ok) {
+                if (response.status === 401) {
+                    throw new Error('Invalid API key');
+                } else if (response.status === 403) {
+                    throw new Error('API key has no permission');
+                } else if (response.status === 429) {
+                    throw new Error('Too many requests');
+                } else {
+                    throw new Error(`Server error: ${response.status}`);
+                }
+            }
+
             const data = await response.json();
+
+            if (!data.data || data.data.length === 0) {
+                resultsDiv.innerHTML = '<p style="color: #888; text-align: center;">No results found</p>';
+                return;
+            }
+
             displayResults(data.data);
 
         } catch (error) {
-            resultsDiv.innerHTML = '<p style="color: red; text-align: center;">Error searching. Check console.</p>';
             console.error('Search error:', error);
+            resultsDiv.innerHTML = `
+                <div style="text-align: center; padding: 10px;">
+                    <p style="color: red;">${error.message}</p>
+                    <p style="color: #888; font-size: 11px;">Check console</p>
+                </div>
+            `;
         }
     }
 
     function displayResults(subtitles) {
         resultsDiv.innerHTML = '';
 
-        if (!subtitles || subtitles.length === 0) {
-            resultsDiv.innerHTML = '<p style="color: #888; text-align: center;">No results found.</p>';
-            return;
-        }
-
-        // Show only the first 5 results
         subtitles.slice(0, 5).forEach(sub => {
-            const movieName = sub.attributes.feature_details.movie_name;
-            const year = sub.attributes.feature_details.movie_year || 'Unknown';
+            const movieName = sub.attributes.feature_details?.movie_name || 'Unknown';
+            const year = sub.attributes.feature_details?.movie_year || 'Unknown';
             const language = sub.attributes.language;
             const subtitleId = sub.id;
             const files = sub.attributes.files;
@@ -58,10 +78,9 @@ document.addEventListener('DOMContentLoaded', function () {
             item.innerHTML = `
                 <h3>${movieName}</h3>
                 <p>Year: ${year} | Lang: ${language.toUpperCase()}</p>
-                <p style="color: #00ff88; margin-top: 5px; font-size: 11px;">Click to download subtitle</p>
+                <p style="color: #00ff88; margin-top: 5px; font-size: 11px;">Click to download</p>
             `;
 
-            // Make it clickable to download
             item.addEventListener('click', function () {
                 downloadSubtitle(subtitleId, movieName, files);
             });
@@ -71,17 +90,14 @@ document.addEventListener('DOMContentLoaded', function () {
     }
 
     async function downloadSubtitle(subtitleId, movieName, files) {
-        resultsDiv.innerHTML = '<p style="color: #00d9ff; text-align: center;">Downloading subtitle...</p>';
+        resultsDiv.innerHTML = '<p style="color: #00d9ff; text-align: center;">Downloading...</p>';
 
         try {
-            // Try the new API endpoint first
             let downloadUrl = null;
 
-            // Check if we have file info
             if (files && files.length > 0) {
                 const fileId = files[0].file_id;
 
-                // Use the download endpoint
                 const downloadResponse = await fetch('https://api.opensubtitles.com/api/v1/download', {
                     method: 'POST',
                     headers: {
@@ -98,39 +114,35 @@ document.addEventListener('DOMContentLoaded', function () {
                 if (downloadResponse.ok) {
                     const downloadData = await downloadResponse.json();
                     downloadUrl = downloadData.link;
-                    console.log('Download link obtained:', downloadUrl);
-                } else {
-                    console.error('Download response error:', await downloadResponse.text());
                 }
             }
 
             if (downloadUrl) {
-                // Fetch the actual subtitle file
                 const srtResponse = await fetch(downloadUrl);
                 const srtContent = await srtResponse.text();
 
-                // Save to Chrome storage
-                chrome.storage.local.set({
-                    currentSubtitle: {
-                        movieName: movieName,
-                        content: srtContent,
-                        timestamp: Date.now()
-                    }
-                }, function () {
-                    resultsDiv.innerHTML = `
+                chrome.storage.local.remove('currentSubtitle', function () {
+                    chrome.storage.local.set({
+                        currentSubtitle: {
+                            movieName: movieName,
+                            content: srtContent,
+                            timestamp: Date.now()
+                        }
+                    }, function () {
+                        resultsDiv.innerHTML = `
                         <div style="text-align: center; padding: 10px;">
-                            <p style="color: #00ff88; font-weight: bold;">✅ Subtitle downloaded!</p>
+                            <p style="color: #00ff88; font-weight: bold;">✅ Downloaded!</p>
                             <p style="color: #888; font-size: 12px;">"${movieName}"</p>
-                            <p style="color: #00d9ff; font-size: 11px; margin-top: 10px;">Play any video and the subtitle will appear automatically!</p>
                         </div>
                     `;
+                    });
                 });
             } else {
-                resultsDiv.innerHTML = '<p style="color: red; text-align: center;">Failed to get download link. Check console for details.</p>';
+                resultsDiv.innerHTML = '<p style="color: red; text-align: center;">Download failed</p>';
             }
 
         } catch (error) {
-            resultsDiv.innerHTML = '<p style="color: red; text-align: center;">Error downloading subtitle.</p>';
+            resultsDiv.innerHTML = '<p style="color: red; text-align: center;">Error</p>';
             console.error('Download error:', error);
         }
     }
