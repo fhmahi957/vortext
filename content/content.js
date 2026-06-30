@@ -1,40 +1,70 @@
-// Check if subtitle exists in storage
-chrome.storage.local.get('currentSubtitle', function (data) {
-    if (data.currentSubtitle) {
-        console.log('Subtitle found:', data.currentSubtitle.movieName);
-        initializeSubtitleOverlay(data.currentSubtitle);
+// Global state
+let currentSubtitles = [];
+let subtitleDiv = null;
+let toggleBtn = null;
+let settingsBtn = null;
+let settingsPanel = null;
+let videoElement = null;
+let isOverlayVisible = true;
+let isSettingsOpen = false;
+
+// Default settings
+let userSettings = {
+    textColor: '#ffffff',
+    bgColorHex: '#000000',
+    bgColor: 'rgba(0, 0, 0, 0.8)',
+    fontSize: '20'
+};
+
+// Load settings from storage on startup
+chrome.storage.local.get('vortextSettings', function (data) {
+    if (data.vortextSettings) {
+        userSettings = { ...userSettings, ...data.vortextSettings };
     }
 });
 
-// Listen for subtitle updates
+// Listen for new subtitles from popup
 chrome.storage.onChanged.addListener(function (changes, namespace) {
     if (namespace === 'local' && changes.currentSubtitle) {
         if (changes.currentSubtitle.newValue) {
-            console.log('New subtitle received:', changes.currentSubtitle.newValue.movieName);
+            console.log('✅ New subtitle received:', changes.currentSubtitle.newValue.movieName);
             initializeSubtitleOverlay(changes.currentSubtitle.newValue);
         }
     }
 });
 
+chrome.storage.local.get('currentSubtitle', function (data) {
+    if (data.currentSubtitle) {
+        console.log('✅ Subtitle found on load:', data.currentSubtitle.movieName);
+        initializeSubtitleOverlay(data.currentSubtitle);
+    }
+});
+
 function initializeSubtitleOverlay(subtitleData) {
-    const subtitles = parseSRT(subtitleData.content);
-    const videos = document.querySelectorAll('video');
+    try {
+        currentSubtitles = parseSRT(subtitleData.content);
+        console.log(`📝 Parsed ${currentSubtitles.length} subtitle entries`);
 
-    videos.forEach(video => {
-        createSubtitleOverlay(video, subtitles, subtitleData.movieName);
-    });
+        function setupVideoObserver() {
+            const videos = document.querySelectorAll('video');
+            console.log(`🎥 Found ${videos.length} video(s) on page`);
 
-    const observer = new MutationObserver(function (mutations) {
-        mutations.forEach(function (mutation) {
-            mutation.addedNodes.forEach(function (node) {
-                if (node.tagName === 'VIDEO') {
-                    createSubtitleOverlay(node, subtitles, subtitleData.movieName);
+            videos.forEach(video => {
+                if (!video.dataset.vortextSetup) {
+                    video.dataset.vortextSetup = 'true';
+                    videoElement = video;
+                    createSubtitleOverlay(video, subtitleData.movieName);
                 }
             });
-        });
-    });
+        }
 
-    observer.observe(document.body, { childList: true, subtree: true });
+        setupVideoObserver();
+
+        const observer = new MutationObserver(setupVideoObserver);
+        observer.observe(document.body, { childList: true, subtree: true });
+    } catch (error) {
+        console.error('❌ Error initializing subtitle overlay:', error);
+    }
 }
 
 function parseSRT(srtContent) {
@@ -45,7 +75,8 @@ function parseSRT(srtContent) {
         const lines = block.trim().split('\n');
         if (lines.length >= 3) {
             const timeLine = lines[1];
-            const text = lines.slice(2).join('\n');
+            // Strip HTML tags like <i> and </i>
+            const text = lines.slice(2).join('\n').replace(/<[^>]*>/g, '');
 
             const timeMatch = timeLine.match(/(\d{2}:\d{2}:\d{2},\d{3}) --> (\d{2}:\d{2}:\d{2},\d{3})/);
             if (timeMatch) {
@@ -66,85 +97,267 @@ function timeToSeconds(timeStr) {
     return parseFloat(hours) * 3600 + parseFloat(minutes) * 60 + parseFloat(seconds);
 }
 
-function createSubtitleOverlay(video, subtitles, movieName) {
-    if (video.dataset.vortextOverlay === 'true') return;
-    video.dataset.vortextOverlay = 'true';
+// DYNAMIC POSITIONING: Keeps subtitles perfectly glued to the video
+function updateOverlayPosition() {
+    if (!videoElement || !subtitleDiv) return;
 
-    const subtitleDiv = document.createElement('div');
-    subtitleDiv.id = 'vortext-subtitle';
-    subtitleDiv.style.cssText = `
-        position: absolute;
-        bottom: 50px;
-        left: 50%;
-        transform: translateX(-50%);
-        background-color: rgba(0, 0, 0, 0.8);
-        color: white;
-        padding: 10px 20px;
-        border-radius: 5px;
-        font-size: 18px;
-        text-align: center;
-        z-index: 9999;
-        display: none;
-        max-width: 80%;
-        pointer-events: none;
-        font-family: Arial, sans-serif;
-        text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.8);
-    `;
+    const rect = videoElement.getBoundingClientRect();
+    const viewportHeight = window.innerHeight;
+    const viewportWidth = window.innerWidth;
 
-    const toggleBtn = document.createElement('button');
-    toggleBtn.innerHTML = '📝';
-    toggleBtn.title = 'Toggle Subtitles';
-    toggleBtn.style.cssText = `
-        position: absolute;
-        bottom: 100px;
-        right: 20px;
-        background-color: rgba(0, 217, 255, 0.9);
-        color: #1a1a2e;
-        border: none;
-        border-radius: 50%;
-        width: 40px;
-        height: 40px;
-        font-size: 20px;
-        cursor: pointer;
-        z-index: 10000;
-        display: none;
-    `;
+    // Calculate distance from the bottom of the viewport to the bottom of the video
+    const bottomOffset = viewportHeight - rect.bottom + 60;
+    subtitleDiv.style.bottom = `${bottomOffset}px`;
+    subtitleDiv.style.left = `${rect.left + (rect.width / 2)}px`;
 
-    let subtitlesEnabled = true;
+    // Position buttons relative to the video's bottom right corner
+    toggleBtn.style.bottom = `${viewportHeight - rect.bottom + 10}px`;
+    toggleBtn.style.right = `${viewportWidth - rect.right + 20}px`;
 
-    toggleBtn.addEventListener('click', function () {
-        subtitlesEnabled = !subtitlesEnabled;
-        subtitleDiv.style.display = subtitlesEnabled ? 'block' : 'none';
-    });
+    settingsBtn.style.bottom = `${viewportHeight - rect.bottom + 10}px`;
+    settingsBtn.style.right = `${viewportWidth - rect.right + 70}px`;
 
-    const container = document.createElement('div');
-    container.style.position = 'relative';
-    video.parentNode.insertBefore(container, video);
-    container.appendChild(video);
-    container.appendChild(subtitleDiv);
-    container.appendChild(toggleBtn);
+    if (settingsPanel && isSettingsOpen) {
+        settingsPanel.style.bottom = `${viewportHeight - rect.bottom + 60}px`;
+        settingsPanel.style.right = `${viewportWidth - rect.right + 20}px`;
+    }
+}
 
-    video.addEventListener('play', function () {
-        toggleBtn.style.display = 'block';
-    });
+function applySettings() {
+    if (!subtitleDiv) return;
+    subtitleDiv.style.color = userSettings.textColor;
+    subtitleDiv.style.backgroundColor = userSettings.bgColor;
+    subtitleDiv.style.fontSize = `${userSettings.fontSize}px`;
+}
 
-    video.addEventListener('timeupdate', function () {
-        const currentTime = video.currentTime;
-        const activeSubtitle = subtitles.find(sub =>
-            currentTime >= sub.startTime && currentTime <= sub.endTime
-        );
+function createSubtitleOverlay(video, movieName) {
+    try {
+        console.log('🔧 Creating subtitle overlay for video');
 
-        if (activeSubtitle && subtitlesEnabled) {
-            subtitleDiv.textContent = activeSubtitle.text;
-            subtitleDiv.style.display = 'block';
-        } else {
+        // Clean up old overlays if they exist (prevents duplicates)
+        if (subtitleDiv) subtitleDiv.remove();
+        if (toggleBtn) toggleBtn.remove();
+        if (settingsBtn) settingsBtn.remove();
+        if (settingsPanel) settingsPanel.remove();
+
+        // 1. Create Subtitle Div
+        subtitleDiv = document.createElement('div');
+        subtitleDiv.style.cssText = `
+            position: fixed;
+            left: 50%;
+            transform: translateX(-50%);
+            padding: 8px 16px;
+            border-radius: 6px;
+            text-align: center;
+            z-index: 2147483647;
+            display: none;
+            max-width: 80%;
+            pointer-events: none;
+            font-family: Arial, sans-serif;
+            text-shadow: 1px 1px 3px rgba(0,0,0,0.8);
+            white-space: pre-line;
+            transition: all 0.1s ease;
+        `;
+        applySettings();
+
+        // 2. Create Toggle Button (📝)
+        toggleBtn = document.createElement('button');
+        toggleBtn.innerHTML = '📝';
+        toggleBtn.title = 'Toggle Subtitles';
+        toggleBtn.style.cssText = `
+            position: fixed;
+            background-color: rgba(0, 217, 255, 0.9);
+            color: #1a1a2e;
+            border: none;
+            border-radius: 50%;
+            width: 36px;
+            height: 36px;
+            font-size: 18px;
+            cursor: pointer;
+            z-index: 2147483647;
+            display: none;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.5);
+        `;
+
+        // 3. Create Settings Button (⚙️)
+        settingsBtn = document.createElement('button');
+        settingsBtn.innerHTML = '⚙️';
+        settingsBtn.title = 'Subtitle Settings';
+        settingsBtn.style.cssText = `
+            position: fixed;
+            background-color: rgba(255, 255, 255, 0.2);
+            color: white;
+            border: 1px solid rgba(255,255,255,0.3);
+            border-radius: 50%;
+            width: 36px;
+            height: 36px;
+            font-size: 18px;
+            cursor: pointer;
+            z-index: 2147483647;
+            display: none;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.5);
+        `;
+
+        // 4. Create Settings Panel
+        settingsPanel = document.createElement('div');
+        settingsPanel.style.cssText = `
+            position: fixed;
+            background: rgba(26, 26, 46, 0.95);
+            border: 1px solid #00d9ff;
+            border-radius: 8px;
+            padding: 15px;
+            z-index: 2147483647;
+            display: none;
+            flex-direction: column;
+            gap: 12px;
+            width: 200px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.6);
+            font-family: Arial, sans-serif;
+            color: white;
+            font-size: 12px;
+        `;
+        settingsPanel.innerHTML = `
+            <div style="display:flex; justify-content:space-between; align-items:center;">
+                <span>Text Color</span>
+                <input type="color" id="vortext-text-color" value="${userSettings.textColor}" style="width:30px; height:24px; border:none; background:none; cursor:pointer;">
+            </div>
+            <div style="display:flex; justify-content:space-between; align-items:center;">
+                <span>Background</span>
+                <input type="color" id="vortext-bg-color" value="${userSettings.bgColorHex}" style="width:30px; height:24px; border:none; background:none; cursor:pointer;">
+            </div>
+            <div style="display:flex; flex-direction:column; gap:5px;">
+                <span>Font Size: <span id="vortext-size-val">${userSettings.fontSize}</span>px</span>
+                <input type="range" id="vortext-font-size" min="12" max="36" value="${userSettings.fontSize}" style="width:100%; cursor:pointer;">
+            </div>
+        `;
+
+        // --- EVENT LISTENERS ---
+
+        toggleBtn.addEventListener('click', function () {
+            isOverlayVisible = !isOverlayVisible;
+            subtitleDiv.style.display = isOverlayVisible ? 'block' : 'none';
+            toggleBtn.style.backgroundColor = isOverlayVisible ? 'rgba(0, 217, 255, 0.9)' : 'rgba(100, 100, 100, 0.9)';
+        });
+
+        settingsBtn.addEventListener('click', function (e) {
+            e.stopPropagation();
+            isSettingsOpen = !isSettingsOpen;
+            settingsPanel.style.display = isSettingsOpen ? 'flex' : 'none';
+            updateOverlayPosition();
+        });
+
+        // Settings Panel Inputs
+        settingsPanel.querySelector('#vortext-text-color').addEventListener('input', (e) => {
+            userSettings.textColor = e.target.value;
+            applySettings();
+            saveSettings();
+        });
+
+        settingsPanel.querySelector('#vortext-bg-color').addEventListener('input', (e) => {
+            const hex = e.target.value;
+            userSettings.bgColorHex = hex;
+            const r = parseInt(hex.slice(1, 3), 16);
+            const g = parseInt(hex.slice(3, 5), 16);
+            const b = parseInt(hex.slice(5, 7), 16);
+            userSettings.bgColor = `rgba(${r}, ${g}, ${b}, 0.8)`; // Keeps it slightly transparent
+            applySettings();
+            saveSettings();
+        });
+
+        settingsPanel.querySelector('#vortext-font-size').addEventListener('input', (e) => {
+            userSettings.fontSize = e.target.value;
+            settingsPanel.querySelector('#vortext-size-val').textContent = e.target.value;
+            applySettings();
+            saveSettings();
+        });
+
+        // Close settings when clicking outside
+        document.addEventListener('click', function (e) {
+            if (isSettingsOpen && !settingsPanel.contains(e.target) && e.target !== settingsBtn) {
+                isSettingsOpen = false;
+                settingsPanel.style.display = 'none';
+            }
+        });
+
+        // Append to DOM
+        document.body.appendChild(subtitleDiv);
+        document.body.appendChild(toggleBtn);
+        document.body.appendChild(settingsBtn);
+        document.body.appendChild(settingsPanel);
+
+        // Show buttons when video plays
+        video.addEventListener('play', function () {
+            toggleBtn.style.display = 'block';
+            settingsBtn.style.display = 'block';
+            updateOverlayPosition();
+        });
+
+        // Keep position updated during scroll, resize, and playback
+        video.addEventListener('timeupdate', updateOverlayPosition);
+        window.addEventListener('resize', updateOverlayPosition);
+        window.addEventListener('scroll', updateOverlayPosition);
+
+        // FULLSCREEN HANDLING
+        document.addEventListener('fullscreenchange', handleFullscreen);
+        document.addEventListener('webkitfullscreenchange', handleFullscreen);
+
+        // Subtitle Syncing
+        video.addEventListener('timeupdate', function () {
+            const currentTime = video.currentTime;
+            const activeSubtitle = currentSubtitles.find(sub =>
+                currentTime >= sub.startTime && currentTime <= sub.endTime
+            );
+
+            if (activeSubtitle && isOverlayVisible) {
+                subtitleDiv.textContent = activeSubtitle.text;
+                subtitleDiv.style.display = 'block';
+            } else {
+                subtitleDiv.style.display = 'none';
+            }
+        });
+
+        video.addEventListener('ended', function () {
             subtitleDiv.style.display = 'none';
-        }
-    });
+        });
 
-    video.addEventListener('ended', function () {
-        subtitleDiv.style.display = 'none';
-    });
+        console.log('✅ Vortext subtitle overlay activated for:', movieName);
+    } catch (error) {
+        console.error('❌ Error creating subtitle overlay:', error);
+    }
+}
 
-    console.log('Subtitle overlay created for video:', movieName);
+// Moves the overlay inside the fullscreen container so it doesn't disappear
+function handleFullscreen() {
+    const fullscreenElement = document.fullscreenElement || document.webkitFullscreenElement;
+
+    if (fullscreenElement) {
+        // Entered fullscreen: Move elements inside the fullscreen container
+        fullscreenElement.appendChild(subtitleDiv);
+        fullscreenElement.appendChild(toggleBtn);
+        fullscreenElement.appendChild(settingsBtn);
+        fullscreenElement.appendChild(settingsPanel);
+
+        // Switch to absolute positioning relative to the fullscreen container
+        subtitleDiv.style.position = 'absolute';
+        toggleBtn.style.position = 'absolute';
+        settingsBtn.style.position = 'absolute';
+        settingsPanel.style.position = 'absolute';
+    } else {
+        // Exited fullscreen: Move elements back to body
+        document.body.appendChild(subtitleDiv);
+        document.body.appendChild(toggleBtn);
+        document.body.appendChild(settingsBtn);
+        document.body.appendChild(settingsPanel);
+
+        // Switch back to fixed positioning relative to the viewport
+        subtitleDiv.style.position = 'fixed';
+        toggleBtn.style.position = 'fixed';
+        settingsBtn.style.position = 'fixed';
+        settingsPanel.style.position = 'fixed';
+    }
+    updateOverlayPosition();
+}
+
+function saveSettings() {
+    chrome.storage.local.set({ vortextSettings: userSettings });
 }

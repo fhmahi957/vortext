@@ -2,14 +2,15 @@
     "manifest_version": 3,
     "name": "Vortext",
     "version": "1.0",
-    "description": "Find subtitles for movies.",
+    "description": "Find subtitles for movies and TV shows",
     "action": {
         "default_popup": "popup/index.html",
         "default_title": "Vortext"
     },
     "permissions": [
         "activeTab",
-        "storage"
+        "storage",
+        "scripting"
     ],
     "host_permissions": [
         "https://api.opensubtitles.com/*",
