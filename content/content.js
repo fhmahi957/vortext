@@ -13,7 +13,8 @@ let userSettings = {
     textColor: '#ffffff',
     bgColorHex: '#000000',
     bgColor: 'rgba(0, 0, 0, 0.8)',
-    fontSize: '20'
+    fontSize: '20',
+    syncOffset: 0
 };
 
 // Load settings from storage on startup
@@ -225,10 +226,19 @@ function createSubtitleOverlay(video, movieName) {
                 <span>Background</span>
                 <input type="color" id="vortext-bg-color" value="${userSettings.bgColorHex}" style="width:30px; height:24px; border:none; background:none; cursor:pointer;">
             </div>
+            <div style="display:flex; justify-content:space-between; align-items:center; border-top: 1px solid rgba(255,255,255,0.2); padding-top: 10px; margin-top: 5px;">
+                <span style="font-size: 11px;">Sync:</span>
+                <div style="display:flex; gap: 5px; align-items:center;">
+                    <button id="vortext-sync-minus" style="background:#ff4757; color:white; border:none; border-radius:4px; width:24px; height:24px; cursor:pointer; font-weight:bold;">-1s</button>
+                    <span id="vortext-sync-val" style="width: 40px; text-align:center; font-weight:bold; color: #00d9ff;">${userSettings.syncOffset > 0 ? '+' : ''}${userSettings.syncOffset.toFixed(1)}s</span>
+                    <button id="vortext-sync-plus" style="background:#2ed573; color:white; border:none; border-radius:4px; width:24px; height:24px; cursor:pointer; font-weight:bold;">+1s</button>
+                </div>
+            </div>
             <div style="display:flex; flex-direction:column; gap:5px;">
                 <span>Font Size: <span id="vortext-size-val">${userSettings.fontSize}</span>px</span>
                 <input type="range" id="vortext-font-size" min="12" max="36" value="${userSettings.fontSize}" style="width:100%; cursor:pointer;">
             </div>
+        
         `;
 
         // --- EVENT LISTENERS ---
@@ -259,7 +269,7 @@ function createSubtitleOverlay(video, movieName) {
             const r = parseInt(hex.slice(1, 3), 16);
             const g = parseInt(hex.slice(3, 5), 16);
             const b = parseInt(hex.slice(5, 7), 16);
-            userSettings.bgColor = `rgba(${r}, ${g}, ${b}, 0.8)`; // Keeps it slightly transparent
+            userSettings.bgColor = `rgba(${r}, ${g}, ${b}, 0.8)`;
             applySettings();
             saveSettings();
         });
@@ -270,6 +280,26 @@ function createSubtitleOverlay(video, movieName) {
             applySettings();
             saveSettings();
         });
+
+        // --- SYNC BUTTONS LOGIC ---
+        settingsPanel.querySelector('#vortext-sync-minus').addEventListener('click', () => {
+            userSettings.syncOffset = parseFloat((userSettings.syncOffset - 1).toFixed(1));
+            updateSyncUI();
+            saveSettings();
+        });
+
+        settingsPanel.querySelector('#vortext-sync-plus').addEventListener('click', () => {
+            userSettings.syncOffset = parseFloat((userSettings.syncOffset + 1).toFixed(1));
+            updateSyncUI();
+            saveSettings();
+        });
+
+        // Helper function to update the sync display
+        function updateSyncUI() {
+            const valDisplay = settingsPanel.querySelector('#vortext-sync-val');
+            const sign = userSettings.syncOffset > 0 ? '+' : '';
+            valDisplay.textContent = `${sign}${userSettings.syncOffset.toFixed(1)}s`;
+        }
 
         // Close settings when clicking outside
         document.addEventListener('click', function (e) {
@@ -301,11 +331,13 @@ function createSubtitleOverlay(video, movieName) {
         document.addEventListener('fullscreenchange', handleFullscreen);
         document.addEventListener('webkitfullscreenchange', handleFullscreen);
 
-        // Subtitle Syncing
+        // Subtitle Syncing with Offset
         video.addEventListener('timeupdate', function () {
-            const currentTime = video.currentTime;
+            // THE MAGIC MATH: Add the offset to the current video time
+            const adjustedTime = video.currentTime + userSettings.syncOffset;
+
             const activeSubtitle = currentSubtitles.find(sub =>
-                currentTime >= sub.startTime && currentTime <= sub.endTime
+                adjustedTime >= sub.startTime && adjustedTime <= sub.endTime
             );
 
             if (activeSubtitle && isOverlayVisible) {
@@ -361,3 +393,66 @@ function handleFullscreen() {
 function saveSettings() {
     chrome.storage.local.set({ vortextSettings: userSettings });
 }
+
+// ==========================================
+// ⌨️ KEYBOARD SHORTCUTS
+// ==========================================
+document.addEventListener('keydown', function (e) {
+    // 1. Don't trigger if the user is typing in a search bar, comment section, etc.
+    const activeTag = document.activeElement.tagName;
+    if (activeTag === 'INPUT' || activeTag === 'TEXTAREA' || document.activeElement.isContentEditable) {
+        return;
+    }
+
+    // 2. Don't trigger if subtitles haven't been loaded yet
+    if (!subtitleDiv) return;
+
+    const key = e.key.toLowerCase();
+
+    // 'S' -> Toggle Subtitles ON/OFF
+    if (key === 's') {
+        toggleBtn.click();
+    }
+    // '+' or '=' -> Increase Font Size
+    else if (key === '+' || key === '=') {
+        let newSize = parseInt(userSettings.fontSize) + 2;
+        if (newSize > 48) newSize = 48;
+
+        userSettings.fontSize = newSize.toString();
+        applySettings();
+        saveSettings();
+
+        if (settingsPanel) {
+            settingsPanel.querySelector('#vortext-font-size').value = newSize;
+            settingsPanel.querySelector('#vortext-size-val').textContent = newSize;
+        }
+    }
+    // '-' or '_' -> Decrease Font Size
+    else if (key === '-' || key === '_') {
+        let newSize = parseInt(userSettings.fontSize) - 2;
+        if (newSize < 12) newSize = 12;
+
+        userSettings.fontSize = newSize.toString();
+        applySettings();
+        saveSettings();
+
+        if (settingsPanel) {
+            settingsPanel.querySelector('#vortext-font-size').value = newSize;
+            settingsPanel.querySelector('#vortext-size-val').textContent = newSize;
+        }
+    }
+    // 'C' -> Cycle Through Text Colors
+    else if (key === 'c') {
+        const colors = ['#ffffff', '#ffff00', '#00ffff', '#ff00ff', '#00ff00'];
+        let currentIdx = colors.indexOf(userSettings.textColor);
+        let nextIdx = (currentIdx + 1) % colors.length;
+
+        userSettings.textColor = colors[nextIdx];
+        applySettings();
+        saveSettings();
+
+        if (settingsPanel) {
+            settingsPanel.querySelector('#vortext-text-color').value = colors[nextIdx];
+        }
+    }
+});
