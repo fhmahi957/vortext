@@ -217,7 +217,7 @@ function createSubtitleOverlay(video, movieName) {
             color: white;
             font-size: 12px;
         `;
-        settingsPanel.innerHTML = `
+                settingsPanel.innerHTML = `
             <div style="display:flex; justify-content:space-between; align-items:center;">
                 <span>Text Color</span>
                 <input type="color" id="vortext-text-color" value="${userSettings.textColor}" style="width:30px; height:24px; border:none; background:none; cursor:pointer;">
@@ -227,18 +227,18 @@ function createSubtitleOverlay(video, movieName) {
                 <input type="color" id="vortext-bg-color" value="${userSettings.bgColorHex}" style="width:30px; height:24px; border:none; background:none; cursor:pointer;">
             </div>
             <div style="display:flex; justify-content:space-between; align-items:center; border-top: 1px solid rgba(255,255,255,0.2); padding-top: 10px; margin-top: 5px;">
-                <span style="font-size: 11px;">Sync:</span>
+                <span style="font-size: 11px;">Sync Offset:</span>
                 <div style="display:flex; gap: 5px; align-items:center;">
-                    <button id="vortext-sync-minus" style="background:#ff4757; color:white; border:none; border-radius:4px; width:24px; height:24px; cursor:pointer; font-weight:bold;">-1s</button>
-                    <span id="vortext-sync-val" style="width: 40px; text-align:center; font-weight:bold; color: #00d9ff;">${userSettings.syncOffset > 0 ? '+' : ''}${userSettings.syncOffset.toFixed(1)}s</span>
-                    <button id="vortext-sync-plus" style="background:#2ed573; color:white; border:none; border-radius:4px; width:24px; height:24px; cursor:pointer; font-weight:bold;">+1s</button>
+                    <button id="vortext-sync-minus" style="background:#ff4757; color:white; border:none; border-radius:4px; width:45px; height:28px; cursor:pointer; font-weight:bold; font-size:11px;">-0.1s</button>
+                    <span id="vortext-sync-val" style="min-width: 45px; text-align:center; font-weight:bold; color: #00d9ff; font-size:13px;">${userSettings.syncOffset > 0 ? '+' : ''}${userSettings.syncOffset.toFixed(1)}s</span>
+                    <button id="vortext-sync-plus" style="background:#2ed573; color:white; border:none; border-radius:4px; width:45px; height:28px; cursor:pointer; font-weight:bold; font-size:11px;">+0.1s</button>
+                    <button id="vortext-sync-reset" style="background:#555; color:white; border:none; border-radius:4px; width:28px; height:28px; cursor:pointer; font-weight:bold; font-size:14px;" title="Reset Sync">↺</button>
                 </div>
             </div>
             <div style="display:flex; flex-direction:column; gap:5px;">
                 <span>Font Size: <span id="vortext-size-val">${userSettings.fontSize}</span>px</span>
                 <input type="range" id="vortext-font-size" min="12" max="36" value="${userSettings.fontSize}" style="width:100%; cursor:pointer;">
             </div>
-        
         `;
 
         // --- EVENT LISTENERS ---
@@ -281,15 +281,22 @@ function createSubtitleOverlay(video, movieName) {
             saveSettings();
         });
 
-        // --- SYNC BUTTONS LOGIC ---
+        // --- SYNC BUTTONS LOGIC (0.1s increments) ---
         settingsPanel.querySelector('#vortext-sync-minus').addEventListener('click', () => {
-            userSettings.syncOffset = parseFloat((userSettings.syncOffset - 1).toFixed(1));
+            userSettings.syncOffset = parseFloat((userSettings.syncOffset - 0.1).toFixed(1));
             updateSyncUI();
             saveSettings();
         });
 
         settingsPanel.querySelector('#vortext-sync-plus').addEventListener('click', () => {
-            userSettings.syncOffset = parseFloat((userSettings.syncOffset + 1).toFixed(1));
+            userSettings.syncOffset = parseFloat((userSettings.syncOffset + 0.1).toFixed(1));
+            updateSyncUI();
+            saveSettings();
+        });
+
+        // NEW: Reset Button Logic
+        settingsPanel.querySelector('#vortext-sync-reset').addEventListener('click', () => {
+            userSettings.syncOffset = 0;
             updateSyncUI();
             saveSettings();
         });
