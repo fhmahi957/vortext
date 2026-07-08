@@ -3,7 +3,7 @@ document.addEventListener('DOMContentLoaded', function () {
     const searchBtn = document.getElementById('searchBtn');
     const resultsDiv = document.getElementById('results');
 
-    const API_KEY = 'YOUR_API_KEY_HERE';
+    const API_KEY = OPENSUBTITLES_API_KEY;
 
     searchBtn.addEventListener('click', performSearch);
     searchInput.addEventListener('keypress', function (e) {
