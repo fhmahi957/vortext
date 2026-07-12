@@ -8,19 +8,38 @@ let videoElement = null;
 let isOverlayVisible = true;
 let isSettingsOpen = false;
 
+// Drag state
+let isDragging = false;
+let dragElement = null;
+let dragType = null;
+let dragOffsetX = 0;
+let dragOffsetY = 0;
+let hasDragged = false;
+
+// Position mode: 'anchored' (follows video) or 'free' (dragged by user)
+let positionMode = 'anchored';
+
 // Default settings
 let userSettings = {
     textColor: '#ffffff',
     bgColorHex: '#000000',
     bgColor: 'rgba(0, 0, 0, 0.8)',
     fontSize: '20',
-    syncOffset: 0
+    syncOffset: 0,
+    toggleBtnLeft: null,
+    toggleBtnTop: null,
+    settingsBtnLeft: null,
+    settingsBtnTop: null
 };
 
 // Load settings from storage on startup
 chrome.storage.local.get('vortextSettings', function (data) {
     if (data.vortextSettings) {
         userSettings = { ...userSettings, ...data.vortextSettings };
+        // If positions are saved, use free mode
+        if (userSettings.toggleBtnLeft !== null) {
+            positionMode = 'free';
+        }
     }
 });
 
@@ -28,7 +47,6 @@ chrome.storage.local.get('vortextSettings', function (data) {
 chrome.storage.onChanged.addListener(function (changes, namespace) {
     if (namespace === 'local' && changes.currentSubtitle) {
         if (changes.currentSubtitle.newValue) {
-            console.log('✅ New subtitle received:', changes.currentSubtitle.newValue.movieName);
             initializeSubtitleOverlay(changes.currentSubtitle.newValue);
         }
     }
@@ -36,7 +54,6 @@ chrome.storage.onChanged.addListener(function (changes, namespace) {
 
 chrome.storage.local.get('currentSubtitle', function (data) {
     if (data.currentSubtitle) {
-        console.log('✅ Subtitle found on load:', data.currentSubtitle.movieName);
         initializeSubtitleOverlay(data.currentSubtitle);
     }
 });
@@ -44,12 +61,9 @@ chrome.storage.local.get('currentSubtitle', function (data) {
 function initializeSubtitleOverlay(subtitleData) {
     try {
         currentSubtitles = parseSRT(subtitleData.content);
-        console.log(`📝 Parsed ${currentSubtitles.length} subtitle entries`);
 
         function setupVideoObserver() {
             const videos = document.querySelectorAll('video');
-            console.log(`🎥 Found ${videos.length} video(s) on page`);
-
             videos.forEach(video => {
                 if (!video.dataset.vortextSetup) {
                     video.dataset.vortextSetup = 'true';
@@ -60,7 +74,6 @@ function initializeSubtitleOverlay(subtitleData) {
         }
 
         setupVideoObserver();
-
         const observer = new MutationObserver(setupVideoObserver);
         observer.observe(document.body, { childList: true, subtree: true });
     } catch (error) {
@@ -71,14 +84,11 @@ function initializeSubtitleOverlay(subtitleData) {
 function parseSRT(srtContent) {
     const subtitles = [];
     const blocks = srtContent.trim().split(/\n\s*\n/);
-
     blocks.forEach(block => {
         const lines = block.trim().split('\n');
         if (lines.length >= 3) {
             const timeLine = lines[1];
-            // Strip HTML tags like <i> and </i>
             const text = lines.slice(2).join('\n').replace(/<[^>]*>/g, '');
-
             const timeMatch = timeLine.match(/(\d{2}:\d{2}:\d{2},\d{3}) --> (\d{2}:\d{2}:\d{2},\d{3})/);
             if (timeMatch) {
                 subtitles.push({
@@ -89,7 +99,6 @@ function parseSRT(srtContent) {
             }
         }
     });
-
     return subtitles;
 }
 
@@ -98,27 +107,49 @@ function timeToSeconds(timeStr) {
     return parseFloat(hours) * 3600 + parseFloat(minutes) * 60 + parseFloat(seconds);
 }
 
-// DYNAMIC POSITIONING: Keeps subtitles perfectly glued to the video
+// DYNAMIC POSITIONING
 function updateOverlayPosition() {
     if (!videoElement || !subtitleDiv) return;
+    
+    // If in free mode and not dragging, don't update positions
+    if (positionMode === 'free' && !isDragging) return;
 
     const rect = videoElement.getBoundingClientRect();
     const viewportHeight = window.innerHeight;
     const viewportWidth = window.innerWidth;
 
-    // Calculate distance from the bottom of the viewport to the bottom of the video
+    // Subtitle positioning (always centered)
     const bottomOffset = viewportHeight - rect.bottom + 60;
     subtitleDiv.style.bottom = `${bottomOffset}px`;
     subtitleDiv.style.left = `${rect.left + (rect.width / 2)}px`;
+    subtitleDiv.style.right = 'auto';
+    subtitleDiv.style.top = 'auto';
 
-    // Position buttons relative to the video's bottom right corner
-    toggleBtn.style.bottom = `${viewportHeight - rect.bottom + 10}px`;
-    toggleBtn.style.right = `${viewportWidth - rect.right + 20}px`;
+    // Default anchor points (bottom-right of video)
+    const defaultBottom = viewportHeight - rect.bottom + 10;
+    const defaultToggleRight = viewportWidth - rect.right + 20;
+    const defaultSettingsRight = viewportWidth - rect.right + 70;
 
-    settingsBtn.style.bottom = `${viewportHeight - rect.bottom + 10}px`;
-    settingsBtn.style.right = `${viewportWidth - rect.right + 70}px`;
+    // Apply Toggle Button Position
+    if (positionMode === 'anchored' || isDragging) {
+        toggleBtn.style.left = 'auto';
+        toggleBtn.style.top = 'auto';
+        toggleBtn.style.bottom = `${defaultBottom}px`;
+        toggleBtn.style.right = `${defaultToggleRight}px`;
+    }
 
+    // Apply Settings Button Position
+    if (positionMode === 'anchored' || isDragging) {
+        settingsBtn.style.left = 'auto';
+        settingsBtn.style.top = 'auto';
+        settingsBtn.style.bottom = `${defaultBottom}px`;
+        settingsBtn.style.right = `${defaultSettingsRight}px`;
+    }
+
+    // Settings Panel Position
     if (settingsPanel && isSettingsOpen) {
+        settingsPanel.style.left = 'auto';
+        settingsPanel.style.top = 'auto';
         settingsPanel.style.bottom = `${viewportHeight - rect.bottom + 60}px`;
         settingsPanel.style.right = `${viewportWidth - rect.right + 20}px`;
     }
@@ -131,93 +162,183 @@ function applySettings() {
     subtitleDiv.style.fontSize = `${userSettings.fontSize}px`;
 }
 
+function resetButtonPositions() {
+    positionMode = 'anchored';
+    userSettings.toggleBtnLeft = null;
+    userSettings.toggleBtnTop = null;
+    userSettings.settingsBtnLeft = null;
+    userSettings.settingsBtnTop = null;
+    saveSettings();
+    updateOverlayPosition();
+}
+
+// ==========================================
+// 🖱️ DRAG FUNCTIONALITY
+// ==========================================
+function makeDraggable(element, type) {
+    element.style.cursor = 'move';
+    
+    element.addEventListener('mousedown', function(e) {
+        if (e.button !== 0) return;
+        
+        isDragging = true;
+        dragElement = element;
+        dragType = type;
+        hasDragged = false;
+        
+        const rect = element.getBoundingClientRect();
+        dragOffsetX = e.clientX - rect.left;
+        dragOffsetY = e.clientY - rect.top;
+        
+        // Switch to free mode
+        positionMode = 'free';
+        
+        // Switch to left/top positioning for smooth dragging
+        element.style.left = `${rect.left}px`;
+        element.style.top = `${rect.top}px`;
+        element.style.right = 'auto';
+        element.style.bottom = 'auto';
+        element.style.transition = 'none';
+        
+        e.preventDefault();
+        e.stopPropagation();
+    });
+    
+    element.addEventListener('click', function(e) {
+        if (hasDragged) {
+            e.preventDefault();
+            e.stopPropagation();
+            hasDragged = false;
+        }
+    });
+}
+
+// Global mouse move
+document.addEventListener('mousemove', function(e) {
+    if (!isDragging || !dragElement) return;
+    hasDragged = true;
+    
+    dragElement.style.left = `${e.clientX - dragOffsetX}px`;
+    dragElement.style.top = `${e.clientY - dragOffsetY}px`;
+});
+
+// Global mouse up
+document.addEventListener('mouseup', function(e) {
+    if (!isDragging || !dragElement) return;
+    
+    // Save the exact position
+    const rect = dragElement.getBoundingClientRect();
+    
+    if (dragType === 'toggle') {
+        userSettings.toggleBtnLeft = rect.left;
+        userSettings.toggleBtnTop = rect.top;
+    } else {
+        userSettings.settingsBtnLeft = rect.left;
+        userSettings.settingsBtnTop = rect.top;
+    }
+    
+    saveSettings();
+    
+    // Restore styling
+    dragElement.style.transition = 'opacity 0.2s, transform 0.2s';
+    dragElement.style.opacity = '1';
+    dragElement.style.transform = 'scale(1)';
+    
+    isDragging = false;
+    dragElement = null;
+    dragType = null;
+    
+    // Keep in free mode with saved positions
+    updateOverlayPosition();
+});
+
+// Apply free mode positions
+function applyFreeModePositions() {
+    if (userSettings.toggleBtnLeft !== null && toggleBtn) {
+        toggleBtn.style.left = `${userSettings.toggleBtnLeft}px`;
+        toggleBtn.style.top = `${userSettings.toggleBtnTop}px`;
+        toggleBtn.style.right = 'auto';
+        toggleBtn.style.bottom = 'auto';
+    }
+    
+    if (userSettings.settingsBtnLeft !== null && settingsBtn) {
+        settingsBtn.style.left = `${userSettings.settingsBtnLeft}px`;
+        settingsBtn.style.top = `${userSettings.settingsBtnTop}px`;
+        settingsBtn.style.right = 'auto';
+        settingsBtn.style.bottom = 'auto';
+    }
+}
+
 function createSubtitleOverlay(video, movieName) {
     try {
-        console.log('🔧 Creating subtitle overlay for video');
+        console.log('🔧 Creating subtitle overlay for:', movieName);
 
-        // Clean up old overlays if they exist (prevents duplicates)
         if (subtitleDiv) subtitleDiv.remove();
         if (toggleBtn) toggleBtn.remove();
         if (settingsBtn) settingsBtn.remove();
         if (settingsPanel) settingsPanel.remove();
 
-        // 1. Create Subtitle Div
+        // 1. Subtitle Div
         subtitleDiv = document.createElement('div');
         subtitleDiv.style.cssText = `
-            position: fixed;
-            left: 50%;
-            transform: translateX(-50%);
-            padding: 8px 16px;
-            border-radius: 6px;
-            text-align: center;
-            z-index: 2147483647;
-            display: none;
-            max-width: 80%;
-            pointer-events: none;
-            font-family: Arial, sans-serif;
-            text-shadow: 1px 1px 3px rgba(0,0,0,0.8);
-            white-space: pre-line;
-            transition: all 0.1s ease;
+            position: fixed; left: 50%; transform: translateX(-50%); padding: 8px 16px;
+            border-radius: 6px; text-align: center; z-index: 2147483647; display: none;
+            max-width: 80%; pointer-events: none; font-family: Arial, sans-serif;
+            text-shadow: 1px 1px 3px rgba(0,0,0,0.8); white-space: pre-line;
         `;
         applySettings();
 
-        // 2. Create Toggle Button (📝)
+        // 2. Toggle Button
         toggleBtn = document.createElement('button');
-        toggleBtn.innerHTML = '📝';
-        toggleBtn.title = 'Toggle Subtitles';
+        toggleBtn.innerHTML = '';
+        toggleBtn.title = 'Toggle Subtitles (Drag to move)';
         toggleBtn.style.cssText = `
-            position: fixed;
-            background-color: rgba(0, 217, 255, 0.9);
+            position: fixed; 
+            background-color: rgba(0, 217, 255, 0.9); 
             color: #1a1a2e;
-            border: none;
-            border-radius: 50%;
-            width: 36px;
-            height: 36px;
+            border: none; 
+            border-radius: 50%; 
+            width: 36px; 
+            height: 36px; 
             font-size: 18px;
-            cursor: pointer;
-            z-index: 2147483647;
-            display: none;
+            cursor: move; 
+            z-index: 2147483647; 
+            display: block;
             box-shadow: 0 2px 8px rgba(0,0,0,0.5);
+            user-select: none; 
+            -webkit-user-select: none;
         `;
 
-        // 3. Create Settings Button (⚙️)
+        // 3. Settings Button
         settingsBtn = document.createElement('button');
         settingsBtn.innerHTML = '⚙️';
-        settingsBtn.title = 'Subtitle Settings';
+        settingsBtn.title = 'Settings (Drag to move)';
         settingsBtn.style.cssText = `
-            position: fixed;
-            background-color: rgba(255, 255, 255, 0.2);
+            position: fixed; 
+            background-color: rgba(255, 255, 255, 0.2); 
             color: white;
-            border: 1px solid rgba(255,255,255,0.3);
-            border-radius: 50%;
-            width: 36px;
+            border: 1px solid rgba(255,255,255,0.3); 
+            border-radius: 50%; 
+            width: 36px; 
             height: 36px;
-            font-size: 18px;
-            cursor: pointer;
-            z-index: 2147483647;
-            display: none;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.5);
+            font-size: 18px; 
+            cursor: move; 
+            z-index: 2147483647; 
+            display: block;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.5); 
+            user-select: none; 
+            -webkit-user-select: none;
         `;
 
-        // 4. Create Settings Panel
+        // 4. Settings Panel
         settingsPanel = document.createElement('div');
         settingsPanel.style.cssText = `
-            position: fixed;
-            background: rgba(26, 26, 46, 0.95);
-            border: 1px solid #00d9ff;
-            border-radius: 8px;
-            padding: 15px;
-            z-index: 2147483647;
-            display: none;
-            flex-direction: column;
-            gap: 12px;
-            width: 200px;
-            box-shadow: 0 4px 15px rgba(0,0,0,0.6);
-            font-family: Arial, sans-serif;
-            color: white;
-            font-size: 12px;
+            position: fixed; background: rgba(26, 26, 46, 0.95); border: 1px solid #00d9ff;
+            border-radius: 8px; padding: 15px; z-index: 2147483647; display: none;
+            flex-direction: column; gap: 12px; width: 220px; box-shadow: 0 4px 15px rgba(0,0,0,0.6);
+            font-family: Arial, sans-serif; color: white; font-size: 12px;
         `;
-                settingsPanel.innerHTML = `
+        settingsPanel.innerHTML = `
             <div style="display:flex; justify-content:space-between; align-items:center;">
                 <span>Text Color</span>
                 <input type="color" id="vortext-text-color" value="${userSettings.textColor}" style="width:30px; height:24px; border:none; background:none; cursor:pointer;">
@@ -232,121 +353,114 @@ function createSubtitleOverlay(video, movieName) {
                     <button id="vortext-sync-minus" style="background:#ff4757; color:white; border:none; border-radius:4px; width:45px; height:28px; cursor:pointer; font-weight:bold; font-size:11px;">-0.1s</button>
                     <span id="vortext-sync-val" style="min-width: 45px; text-align:center; font-weight:bold; color: #00d9ff; font-size:13px;">${userSettings.syncOffset > 0 ? '+' : ''}${userSettings.syncOffset.toFixed(1)}s</span>
                     <button id="vortext-sync-plus" style="background:#2ed573; color:white; border:none; border-radius:4px; width:45px; height:28px; cursor:pointer; font-weight:bold; font-size:11px;">+0.1s</button>
-                    <button id="vortext-sync-reset" style="background:#555; color:white; border:none; border-radius:4px; width:28px; height:28px; cursor:pointer; font-weight:bold; font-size:14px;" title="Reset Sync">↺</button>
+                    <button id="vortext-sync-reset" style="background:#555; color:white; border:none; border-radius:4px; width:28px; height:28px; cursor:pointer; font-weight:bold; font-size:14px;" title="Reset Sync"></button>
                 </div>
             </div>
             <div style="display:flex; flex-direction:column; gap:5px;">
                 <span>Font Size: <span id="vortext-size-val">${userSettings.fontSize}</span>px</span>
                 <input type="range" id="vortext-font-size" min="12" max="36" value="${userSettings.fontSize}" style="width:100%; cursor:pointer;">
             </div>
+            <div style="border-top: 1px solid rgba(255,255,255,0.2); padding-top: 10px; margin-top: 5px;">
+                <button id="vortext-reset-position" style="width:100%; background:#e94560; color:white; border:none; border-radius:4px; padding:8px; cursor:pointer; font-weight:bold; font-size:11px;">🔄 Reset Button Positions</button>
+            </div>
         `;
 
         // --- EVENT LISTENERS ---
-
         toggleBtn.addEventListener('click', function () {
+            if (hasDragged) return;
             isOverlayVisible = !isOverlayVisible;
             subtitleDiv.style.display = isOverlayVisible ? 'block' : 'none';
             toggleBtn.style.backgroundColor = isOverlayVisible ? 'rgba(0, 217, 255, 0.9)' : 'rgba(100, 100, 100, 0.9)';
         });
 
         settingsBtn.addEventListener('click', function (e) {
+            if (hasDragged) return;
             e.stopPropagation();
             isSettingsOpen = !isSettingsOpen;
             settingsPanel.style.display = isSettingsOpen ? 'flex' : 'none';
-            updateOverlayPosition();
         });
 
-        // Settings Panel Inputs
-        settingsPanel.querySelector('#vortext-text-color').addEventListener('input', (e) => {
-            userSettings.textColor = e.target.value;
-            applySettings();
-            saveSettings();
-        });
+        makeDraggable(toggleBtn, 'toggle');
+        makeDraggable(settingsBtn, 'settings');
 
+        // Settings Inputs
+        settingsPanel.querySelector('#vortext-text-color').addEventListener('input', (e) => { userSettings.textColor = e.target.value; applySettings(); saveSettings(); });
         settingsPanel.querySelector('#vortext-bg-color').addEventListener('input', (e) => {
-            const hex = e.target.value;
-            userSettings.bgColorHex = hex;
-            const r = parseInt(hex.slice(1, 3), 16);
-            const g = parseInt(hex.slice(3, 5), 16);
-            const b = parseInt(hex.slice(5, 7), 16);
-            userSettings.bgColor = `rgba(${r}, ${g}, ${b}, 0.8)`;
-            applySettings();
-            saveSettings();
+            const hex = e.target.value; userSettings.bgColorHex = hex;
+            const r = parseInt(hex.slice(1, 3), 16); const g = parseInt(hex.slice(3, 5), 16); const b = parseInt(hex.slice(5, 7), 16);
+            userSettings.bgColor = `rgba(${r}, ${g}, ${b}, 0.8)`; applySettings(); saveSettings();
         });
-
         settingsPanel.querySelector('#vortext-font-size').addEventListener('input', (e) => {
-            userSettings.fontSize = e.target.value;
-            settingsPanel.querySelector('#vortext-size-val').textContent = e.target.value;
-            applySettings();
-            saveSettings();
+            userSettings.fontSize = e.target.value; settingsPanel.querySelector('#vortext-size-val').textContent = e.target.value; applySettings(); saveSettings();
         });
 
-        // --- SYNC BUTTONS LOGIC (0.1s increments) ---
-        settingsPanel.querySelector('#vortext-sync-minus').addEventListener('click', () => {
-            userSettings.syncOffset = parseFloat((userSettings.syncOffset - 0.1).toFixed(1));
-            updateSyncUI();
-            saveSettings();
+        settingsPanel.querySelector('#vortext-sync-minus').addEventListener('click', () => { userSettings.syncOffset = parseFloat((userSettings.syncOffset - 0.1).toFixed(1)); updateSyncUI(); saveSettings(); });
+        settingsPanel.querySelector('#vortext-sync-plus').addEventListener('click', () => { userSettings.syncOffset = parseFloat((userSettings.syncOffset + 0.1).toFixed(1)); updateSyncUI(); saveSettings(); });
+        settingsPanel.querySelector('#vortext-sync-reset').addEventListener('click', () => { userSettings.syncOffset = 0; updateSyncUI(); saveSettings(); });
+        
+        settingsPanel.querySelector('#vortext-reset-position').addEventListener('click', () => {
+            resetButtonPositions();
+            const btn = settingsPanel.querySelector('#vortext-reset-position');
+            btn.textContent = '✅ Reset!'; btn.style.background = '#00ff88';
+            setTimeout(() => { btn.textContent = '🔄 Reset Button Positions'; btn.style.background = '#e94560'; }, 1500);
         });
 
-        settingsPanel.querySelector('#vortext-sync-plus').addEventListener('click', () => {
-            userSettings.syncOffset = parseFloat((userSettings.syncOffset + 0.1).toFixed(1));
-            updateSyncUI();
-            saveSettings();
-        });
-
-        // NEW: Reset Button Logic
-        settingsPanel.querySelector('#vortext-sync-reset').addEventListener('click', () => {
-            userSettings.syncOffset = 0;
-            updateSyncUI();
-            saveSettings();
-        });
-
-        // Helper function to update the sync display
         function updateSyncUI() {
             const valDisplay = settingsPanel.querySelector('#vortext-sync-val');
-            const sign = userSettings.syncOffset > 0 ? '+' : '';
-            valDisplay.textContent = `${sign}${userSettings.syncOffset.toFixed(1)}s`;
+            valDisplay.textContent = `${userSettings.syncOffset > 0 ? '+' : ''}${userSettings.syncOffset.toFixed(1)}s`;
         }
 
-        // Close settings when clicking outside
         document.addEventListener('click', function (e) {
             if (isSettingsOpen && !settingsPanel.contains(e.target) && e.target !== settingsBtn) {
-                isSettingsOpen = false;
-                settingsPanel.style.display = 'none';
+                isSettingsOpen = false; settingsPanel.style.display = 'none';
             }
         });
 
-        // Append to DOM
         document.body.appendChild(subtitleDiv);
         document.body.appendChild(toggleBtn);
         document.body.appendChild(settingsBtn);
         document.body.appendChild(settingsPanel);
 
-        // Show buttons when video plays
+        // Apply saved positions or default anchored mode
+        if (positionMode === 'free') {
+            applyFreeModePositions();
+        } else {
+            updateOverlayPosition();
+        }
+
         video.addEventListener('play', function () {
             toggleBtn.style.display = 'block';
             settingsBtn.style.display = 'block';
-            updateOverlayPosition();
+            if (positionMode === 'anchored') {
+                updateOverlayPosition();
+            }
         });
 
-        // Keep position updated during scroll, resize, and playback
-        video.addEventListener('timeupdate', updateOverlayPosition);
-        window.addEventListener('resize', updateOverlayPosition);
-        window.addEventListener('scroll', updateOverlayPosition);
+        // Only update position in anchored mode
+        video.addEventListener('timeupdate', function() {
+            if (positionMode === 'anchored') {
+                updateOverlayPosition();
+            }
+        });
+        
+        window.addEventListener('resize', function() {
+            if (positionMode === 'anchored') {
+                updateOverlayPosition();
+            }
+        });
+        
+        window.addEventListener('scroll', function() {
+            if (positionMode === 'anchored') {
+                updateOverlayPosition();
+            }
+        });
 
-        // FULLSCREEN HANDLING
         document.addEventListener('fullscreenchange', handleFullscreen);
         document.addEventListener('webkitfullscreenchange', handleFullscreen);
 
-        // Subtitle Syncing with Offset
         video.addEventListener('timeupdate', function () {
-            // THE MAGIC MATH: Add the offset to the current video time
             const adjustedTime = video.currentTime + userSettings.syncOffset;
-
-            const activeSubtitle = currentSubtitles.find(sub =>
-                adjustedTime >= sub.startTime && adjustedTime <= sub.endTime
-            );
-
+            const activeSubtitle = currentSubtitles.find(sub => adjustedTime >= sub.startTime && adjustedTime <= sub.endTime);
             if (activeSubtitle && isOverlayVisible) {
                 subtitleDiv.textContent = activeSubtitle.text;
                 subtitleDiv.style.display = 'block';
@@ -355,46 +469,46 @@ function createSubtitleOverlay(video, movieName) {
             }
         });
 
-        video.addEventListener('ended', function () {
-            subtitleDiv.style.display = 'none';
-        });
+        video.addEventListener('ended', function () { subtitleDiv.style.display = 'none'; });
 
-        console.log('✅ Vortext subtitle overlay activated for:', movieName);
     } catch (error) {
         console.error('❌ Error creating subtitle overlay:', error);
     }
 }
 
-// Moves the overlay inside the fullscreen container so it doesn't disappear
 function handleFullscreen() {
     const fullscreenElement = document.fullscreenElement || document.webkitFullscreenElement;
 
     if (fullscreenElement) {
-        // Entered fullscreen: Move elements inside the fullscreen container
         fullscreenElement.appendChild(subtitleDiv);
         fullscreenElement.appendChild(toggleBtn);
         fullscreenElement.appendChild(settingsBtn);
         fullscreenElement.appendChild(settingsPanel);
 
-        // Switch to absolute positioning relative to the fullscreen container
         subtitleDiv.style.position = 'absolute';
         toggleBtn.style.position = 'absolute';
         settingsBtn.style.position = 'absolute';
         settingsPanel.style.position = 'absolute';
     } else {
-        // Exited fullscreen: Move elements back to body
         document.body.appendChild(subtitleDiv);
         document.body.appendChild(toggleBtn);
         document.body.appendChild(settingsBtn);
         document.body.appendChild(settingsPanel);
 
-        // Switch back to fixed positioning relative to the viewport
         subtitleDiv.style.position = 'fixed';
         toggleBtn.style.position = 'fixed';
         settingsBtn.style.position = 'fixed';
         settingsPanel.style.position = 'fixed';
+        
+        toggleBtn.style.display = 'block';
+        settingsBtn.style.display = 'block';
     }
-    updateOverlayPosition();
+    
+    if (positionMode === 'free') {
+        applyFreeModePositions();
+    } else {
+        updateOverlayPosition();
+    }
 }
 
 function saveSettings() {
@@ -405,61 +519,27 @@ function saveSettings() {
 // ⌨️ KEYBOARD SHORTCUTS
 // ==========================================
 document.addEventListener('keydown', function (e) {
-    // 1. Don't trigger if the user is typing in a search bar, comment section, etc.
     const activeTag = document.activeElement.tagName;
-    if (activeTag === 'INPUT' || activeTag === 'TEXTAREA' || document.activeElement.isContentEditable) {
-        return;
-    }
-
-    // 2. Don't trigger if subtitles haven't been loaded yet
+    if (activeTag === 'INPUT' || activeTag === 'TEXTAREA' || document.activeElement.isContentEditable) return;
     if (!subtitleDiv) return;
 
     const key = e.key.toLowerCase();
 
-    // 'S' -> Toggle Subtitles ON/OFF
-    if (key === 's') {
-        toggleBtn.click();
-    }
-    // '+' or '=' -> Increase Font Size
+    if (key === 's') { toggleBtn.click(); }
     else if (key === '+' || key === '=') {
-        let newSize = parseInt(userSettings.fontSize) + 2;
-        if (newSize > 48) newSize = 48;
-
-        userSettings.fontSize = newSize.toString();
-        applySettings();
-        saveSettings();
-
-        if (settingsPanel) {
-            settingsPanel.querySelector('#vortext-font-size').value = newSize;
-            settingsPanel.querySelector('#vortext-size-val').textContent = newSize;
-        }
+        let newSize = parseInt(userSettings.fontSize) + 2; if (newSize > 48) newSize = 48;
+        userSettings.fontSize = newSize.toString(); applySettings(); saveSettings();
+        if (settingsPanel) { settingsPanel.querySelector('#vortext-font-size').value = newSize; settingsPanel.querySelector('#vortext-size-val').textContent = newSize; }
     }
-    // '-' or '_' -> Decrease Font Size
     else if (key === '-' || key === '_') {
-        let newSize = parseInt(userSettings.fontSize) - 2;
-        if (newSize < 12) newSize = 12;
-
-        userSettings.fontSize = newSize.toString();
-        applySettings();
-        saveSettings();
-
-        if (settingsPanel) {
-            settingsPanel.querySelector('#vortext-font-size').value = newSize;
-            settingsPanel.querySelector('#vortext-size-val').textContent = newSize;
-        }
+        let newSize = parseInt(userSettings.fontSize) - 2; if (newSize < 12) newSize = 12;
+        userSettings.fontSize = newSize.toString(); applySettings(); saveSettings();
+        if (settingsPanel) { settingsPanel.querySelector('#vortext-font-size').value = newSize; settingsPanel.querySelector('#vortext-size-val').textContent = newSize; }
     }
-    // 'C' -> Cycle Through Text Colors
     else if (key === 'c') {
         const colors = ['#ffffff', '#ffff00', '#00ffff', '#ff00ff', '#00ff00'];
-        let currentIdx = colors.indexOf(userSettings.textColor);
-        let nextIdx = (currentIdx + 1) % colors.length;
-
-        userSettings.textColor = colors[nextIdx];
-        applySettings();
-        saveSettings();
-
-        if (settingsPanel) {
-            settingsPanel.querySelector('#vortext-text-color').value = colors[nextIdx];
-        }
+        let currentIdx = colors.indexOf(userSettings.textColor); let nextIdx = (currentIdx + 1) % colors.length;
+        userSettings.textColor = colors[nextIdx]; applySettings(); saveSettings();
+        if (settingsPanel) { settingsPanel.querySelector('#vortext-text-color').value = colors[nextIdx]; }
     }
-});
+});s
