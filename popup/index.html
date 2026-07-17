@@ -1,32 +1,88 @@
 <!DOCTYPE html>
 <html lang="en">
-
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Vortext</title>
     <link rel="stylesheet" href="styles.css">
 </head>
-
 <body>
     <div class="container">
         <h1>🎬 Vortext</h1>
-        <p class="subtitle">Subtitle overlay for any video</p>
+        
+        <!-- Video Detection Status -->
+        <div id="videoStatusIndicator" class="status-indicator">
+            ⏳ <span style="color: #888;">Checking video...</span>
+        </div>
+        
+        <p class="subtitle" id="statusText">No subtitle loaded</p>
 
         <div class="search-box">
             <input type="text" id="searchInput" placeholder="Search movie or show..." autocomplete="off">
             <button id="searchBtn">Search</button>
         </div>
 
+        <!-- Drag & Drop Zone -->
+        <div id="dropZone" class="drop-zone">
+            <p style="margin: 0; color: #888; font-size: 12px;"> Drop .srt file here</p>
+        </div>
+
         <div id="results" class="results">
             <!-- Results will appear here -->
         </div>
+
+        <!-- Control Panel -->
+        <div id="controlPanel" class="control-panel" style="display: none;">
+            <div class="control-section">
+                <div class="control-header">
+                    <span>Subtitles</span>
+                    <button id="toggleBtn" class="action-btn">ON</button>
+                </div>
+            </div>
+
+            <div class="control-section">
+                <div class="control-header">
+                    <span>Sync Offset</span>
+                </div>
+                <div class="sync-controls">
+                    <button id="syncMinus" class="sync-btn">-0.1s</button>
+                    <span id="syncVal" class="sync-val">0.0s</span>
+                    <button id="syncPlus" class="sync-btn">+0.1s</button>
+                    <button id="syncReset" class="sync-btn reset">↺</button>
+                </div>
+            </div>
+
+            <div class="control-section">
+                <div class="control-header">
+                    <span>Text Color</span>
+                    <input type="color" id="textColor" class="color-picker">
+                </div>
+            </div>
+
+            <div class="control-section">
+                <div class="control-header">
+                    <span>Background</span>
+                    <input type="color" id="bgColor" class="color-picker">
+                </div>
+            </div>
+
+            <div class="control-section">
+                <div class="control-header">
+                    <span>Font Size: <span id="fontSizeVal">20</span>px</span>
+                </div>
+                <input type="range" id="fontSize" min="12" max="48" class="slider">
+            </div>
+            
+            <div class="shortcuts-hint">
+                <p><strong>Shortcuts:</strong><br>
+                [ / ] : ±0.1s | Shift+[ / ] : ±0.5s<br>
+                Ctrl+[ / ] : ±2s | Alt+[ / ] : ±10s<br>
+                S : Toggle | +/- : Size | C : Color</p>
+            </div>
+        </div>
     </div>
 
-    <!-- 1. Load config first so the API_KEY variable is available -->
     <script src="config.js"></script>
-    <!-- 2. Then load your main logic -->
     <script src="popup.js"></script>
 </body>
-
 </html>
