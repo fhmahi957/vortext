@@ -12,6 +12,7 @@ let osdElement = null;
 let currentMovieName = null;
 let pageHasVideo = false;
 
+
 // Default Settings
 let userSettings = {
     textColor: '#ffffff',
@@ -112,6 +113,11 @@ function cleanupAll() {
 }
 
 function cleanupIfNoVideo() {
+    if (osdElement) {
+        osdElement.remove();
+        osdElement = null;
+    }
+
     if (!pageHasVideo || currentSubtitles.length === 0) {
         if (controlBar) { controlBar.remove(); controlBar = null; }
         if (settingsPanel) { settingsPanel.remove(); settingsPanel = null; }
@@ -500,7 +506,15 @@ function toggleSettingsPanel() {
 // 8. OSD NOTIFICATIONS
 // ==========================================
 function showOSD(message, duration = 1500) {
-    if (osdElement) osdElement.remove();
+    
+    if (currentSubtitles.length === 0 || !pageHasVideo) {
+        return; 
+    }
+    
+    if (osdElement) {
+        osdElement.remove();
+        osdElement = null;
+    }
     
     osdElement = document.createElement('div');
     osdElement.style.cssText = `
@@ -524,7 +538,12 @@ function showOSD(message, duration = 1500) {
     osdElement.appendChild(style);
     document.body.appendChild(osdElement);
     
-    setTimeout(() => { if (osdElement) { osdElement.remove(); osdElement = null; } }, duration);
+    setTimeout(() => { 
+        if (osdElement) { 
+            osdElement.remove(); 
+            osdElement = null; 
+        } 
+    }, duration);
 }
 
 // ==========================================
