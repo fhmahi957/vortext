@@ -1,5 +1,5 @@
 // ==========================================
-// VORTEXT - Advanced Subtitle Overlay (Clean Version)
+// VORTEXT - Advanced Subtitle Overlay (Final Stable Version)
 // ==========================================
 
 // 1. GLOBAL STATE
@@ -11,7 +11,8 @@ let settingsPanel = null;
 let osdElement = null;
 let currentMovieName = null;
 let pageHasVideo = false;
-
+let isPageInitialized = false; // Prevents infinite loops and flickering
+let observerTimeout = null;    // For debouncing DOM changes
 
 // Default Settings
 let userSettings = {
@@ -99,7 +100,7 @@ function saveSettings() {
 }
 
 // ==========================================
-// 4. CLEANUP FUNCTIONS (Prevents UI leaks)
+// 4. CLEANUP FUNCTIONS (Safe & Predictable)
 // ==========================================
 function cleanupAll() {
     if (subtitleDiv) { subtitleDiv.remove(); subtitleDiv = null; }
@@ -110,6 +111,12 @@ function cleanupAll() {
     currentSubtitles = [];
     videoElement = null;
     pageHasVideo = false;
+    isPageInitialized = false; // Reset for next valid page
+    
+    if (observerTimeout) {
+        clearTimeout(observerTimeout);
+        observerTimeout = null;
+    }
 }
 
 function cleanupIfNoVideo() {
@@ -121,7 +128,17 @@ function cleanupIfNoVideo() {
     if (!pageHasVideo || currentSubtitles.length === 0) {
         if (controlBar) { controlBar.remove(); controlBar = null; }
         if (settingsPanel) { settingsPanel.remove(); settingsPanel = null; }
-        if (subtitleDiv) { subtitleDiv.style.display = 'none'; }
+        if (subtitleDiv) { 
+            subtitleDiv.style.display = 'none';
+            // Reset manual positioning
+            delete subtitleDiv.dataset.manuallyPositioned;
+        }
+        
+        isPageInitialized = false;
+        
+        document.querySelectorAll('video[data-vortextsetup="true"]').forEach(video => {
+            delete video.dataset.vortextSetup;
+        });
     }
 }
 
@@ -129,7 +146,6 @@ function cleanupIfNoVideo() {
 // 5. SUBTITLE PARSING & ENCODING
 // ==========================================
 function detectAndFixBanglaEncoding(text) {
-    // Basic fix for common UTF-8 misinterpretation of Bangla
     const patterns = [
         { regex: /à¦/g, replacement: 'া' },
         { regex: /à§/g, replacement: 'ি' }
@@ -170,16 +186,21 @@ function parseSRT(srtContent) {
 }
 
 // ==========================================
-// 6. OVERLAY & OBSERVER LOGIC
+// 6. OVERLAY & OBSERVER LOGIC (THE CORE FIX)
 // ==========================================
 function initializeSubtitleOverlay(subtitleData) {
     try {
         currentSubtitles = parseSRT(subtitleData.content);
-        pageHasVideo = true; // Assume we will find a video
+        currentMovieName = subtitleData.movieName;
+        isPageInitialized = false; // Reset flag for new subtitle
         
         setupVideoObserver();
         
-        const observer = new MutationObserver(setupVideoObserver);
+        const observer = new MutationObserver(() => {
+            // Debounce: Wait 500ms after DOM stops changing before checking
+            if (observerTimeout) clearTimeout(observerTimeout);
+            observerTimeout = setTimeout(setupVideoObserver, 500);
+        });
         observer.observe(document.body, { childList: true, subtree: true });
         
         showOSD(`Loaded: ${subtitleData.movieName}`);
@@ -190,45 +211,71 @@ function initializeSubtitleOverlay(subtitleData) {
 }
 
 function setupVideoObserver() {
+    // Guard 1: No subtitle loaded? Do nothing.
     if (currentSubtitles.length === 0) {
         cleanupIfNoVideo();
         return;
     }
 
-    const videos = document.querySelectorAll('video');
-    pageHasVideo = videos.length > 0;
-    
-    videos.forEach(video => {
-        if (!video.dataset.vortextSetup) {
+    // Guard 2: Already initialized on this page? Do nothing (Prevents flickering).
+    if (isPageInitialized) {
+        return;
+    }
+
+    const allVideos = document.querySelectorAll('video');
+    let validVideoFound = false;
+
+    for (let video of allVideos) {
+        // Guard 3: Strict visibility and size check (ignores 1x1 hidden tracking videos)
+        const rect = video.getBoundingClientRect();
+        const isLargeEnough = rect.width > 50 && rect.height > 50;
+        const style = window.getComputedStyle(video);
+        const isNotHidden = style.display !== 'none' && style.visibility !== 'hidden';
+        const hasSource = video.src || video.querySelector('source');
+
+        if (isLargeEnough && isNotHidden && hasSource && !video.dataset.vortextSetup) {
             video.dataset.vortextSetup = 'true';
             videoElement = video;
+            pageHasVideo = true;
+            validVideoFound = true;
+
             createSubtitleOverlay(video);
             createControlBar(video);
+            
+            isPageInitialized = true; // Lock it! No more re-runs on this page.
+            break; // Stop checking after finding the first valid video
         }
-    });
-    
-    // Check inside iframes
-    document.querySelectorAll('iframe').forEach(iframe => {
-        try {
-            const iframeDoc = iframe.contentDocument || iframe.contentWindow.document;
-            const iframeVideos = iframeDoc.querySelectorAll('video');
-            if (iframeVideos.length > 0) {
-                pageHasVideo = true;
-                iframeVideos.forEach(video => {
-                    if (!video.dataset.vortextSetup) {
+    }
+
+    // Check inside iframes (only if not initialized yet)
+    if (!isPageInitialized) {
+        document.querySelectorAll('iframe').forEach(iframe => {
+            try {
+                const iframeDoc = iframe.contentDocument || iframe.contentWindow.document;
+                const iframeVideos = iframeDoc.querySelectorAll('video');
+                for (let video of iframeVideos) {
+                    const rect = video.getBoundingClientRect();
+                    if (rect.width > 50 && rect.height > 50 && !video.dataset.vortextSetup) {
                         video.dataset.vortextSetup = 'true';
                         videoElement = video;
+                        pageHasVideo = true;
+                        validVideoFound = true;
+
                         createSubtitleOverlay(video);
                         createControlBar(video);
+                        
+                        isPageInitialized = true;
+                        break;
                     }
-                });
+                }
+            } catch (e) {
+                // Cross-origin iframe, ignore safely
             }
-        } catch (e) {
-            // Cross-origin iframe, ignore
-        }
-    });
-    
-    if (!pageHasVideo) {
+        });
+    }
+
+    if (!validVideoFound) {
+        pageHasVideo = false;
         cleanupIfNoVideo();
     }
 }
@@ -247,17 +294,78 @@ function createSubtitleOverlay(video) {
         text-align: center;
         z-index: 2147483647;
         display: ${userSettings.isOverlayVisible ? 'block' : 'none'};
-        max-width: 80%;
-        pointer-events: none;
+        max-width: 90%;
+        width: auto;
+        pointer-events: auto; /* Changed from none to allow dragging */
         font-family: Arial, sans-serif;
         text-shadow: 1px 1px 3px rgba(0,0,0,0.8);
         white-space: pre-line;
         bottom: 60px;
+        cursor: move; /* Show move cursor */
+        user-select: none;
+        transition: none; /* Remove transition for smooth dragging */
     `;
     
     applySettings();
     document.body.appendChild(subtitleDiv);
     updateOverlayPosition();
+    
+    // Drag functionality
+    let isDragging = false;
+    let startX, startY, initialLeft, initialBottom;
+    
+    subtitleDiv.addEventListener('mousedown', (e) => {
+        isDragging = true;
+        startX = e.clientX;
+        startY = e.clientY;
+        
+        const rect = subtitleDiv.getBoundingClientRect();
+        initialLeft = rect.left;
+        initialBottom = window.innerHeight - rect.bottom;
+        
+        subtitleDiv.style.transition = 'none';
+        e.preventDefault();
+    });
+    
+    document.addEventListener('mousemove', (e) => {
+        if (!isDragging) return;
+        
+        const deltaX = e.clientX - startX;
+        const deltaY = e.clientY - startY;
+        
+        // Calculate new position
+        const newLeft = initialLeft + deltaX;
+        const newBottom = initialBottom - deltaY;
+        
+        // Apply new position
+        subtitleDiv.style.left = `${newLeft + (subtitleDiv.offsetWidth / 2)}px`;
+        subtitleDiv.style.transform = 'translateX(-50%)';
+        subtitleDiv.style.bottom = `${newBottom}px`;
+        
+        // Mark as manually positioned
+        subtitleDiv.dataset.manuallyPositioned = 'true';
+    });
+    
+    document.addEventListener('mouseup', () => {
+        if (isDragging) {
+            isDragging = false;
+            // Save position to storage
+            const rect = subtitleDiv.getBoundingClientRect();
+            const videoRect = videoElement.getBoundingClientRect();
+            
+            // Save relative position
+            const relativeX = ((rect.left - videoRect.left) / videoRect.width) * 100;
+            const relativeY = ((window.innerHeight - rect.bottom) / videoRect.height) * 100;
+            
+            chrome.storage.local.set({
+                subtitlePosition: {
+                    x: relativeX,
+                    y: relativeY,
+                    movieName: currentMovieName
+                }
+            });
+        }
+    });
     
     video.addEventListener('timeupdate', updateOverlayPosition);
     window.addEventListener('resize', updateOverlayPosition);
@@ -277,11 +385,13 @@ function createSubtitleOverlay(video) {
             subtitleDiv.style.bottom = '60px';
             subtitleDiv.style.left = '50%';
             subtitleDiv.style.transform = 'translateX(-50%)';
-            subtitleDiv.style.width = '80%';
+            subtitleDiv.style.maxWidth = '90%';
+            subtitleDiv.style.width = 'auto';
         } else {
             document.body.appendChild(subtitleDiv);
             subtitleDiv.style.position = 'fixed';
-            updateOverlayPosition();
+            // Restore position after fullscreen
+            setTimeout(updateOverlayPosition, 100);
         }
     }
     
@@ -309,9 +419,26 @@ function createSubtitleOverlay(video) {
 
 function updateOverlayPosition() {
     if (!videoElement || !subtitleDiv) return;
+    
+    // If manually positioned, don't auto-adjust
+    if (subtitleDiv.dataset.manuallyPositioned === 'true') {
+        return;
+    }
+    
     const rect = videoElement.getBoundingClientRect();
-    subtitleDiv.style.bottom = `${window.innerHeight - rect.bottom + 60}px`;
-    subtitleDiv.style.left = `${rect.left + (rect.width / 2)}px`;
+    const viewportHeight = window.innerHeight;
+    
+    // Calculate responsive bottom position
+    const bottomOffset = Math.max(60, viewportHeight - rect.bottom);
+    
+    // Only update if not in fullscreen
+    const fullscreenElement = document.fullscreenElement || 
+                              document.webkitFullscreenElement;
+    
+    if (!fullscreenElement) {
+        subtitleDiv.style.bottom = `${bottomOffset}px`;
+        subtitleDiv.style.left = `${rect.left + (rect.width / 2)}px`;
+    }
 }
 
 function applySettings() {
@@ -343,7 +470,6 @@ function createControlBar(video) {
         font-family: Arial, sans-serif;
     `;
 
-    // Settings Button
     const settingsBtn = document.createElement('button');
     settingsBtn.innerHTML = '⚙️';
     settingsBtn.style.cssText = `
@@ -354,7 +480,6 @@ function createControlBar(video) {
     settingsBtn.onmouseleave = () => settingsBtn.style.background = 'transparent';
     settingsBtn.onclick = () => toggleSettingsPanel();
     
-    // Toggle Button
     const toggleBtn = document.createElement('button');
     toggleBtn.textContent = userSettings.isOverlayVisible ? 'ON' : 'OFF';
     toggleBtn.style.cssText = `
@@ -434,7 +559,6 @@ function createSettingsPanel() {
         </div>
     `;
     
-    // Add dynamic styles for buttons inside panel
     const style = document.createElement('style');
     style.textContent = `.v-sync-btn { background: #0f3460; color: white; border: 1px solid #00d9ff; padding: 6px 10px; border-radius: 4px; cursor: pointer; font-size: 11px; flex: 1; } .v-sync-btn:hover { background: #00d9ff; color: #1a1a2e; }`;
     settingsPanel.appendChild(style);
@@ -506,7 +630,6 @@ function toggleSettingsPanel() {
 // 8. OSD NOTIFICATIONS
 // ==========================================
 function showOSD(message, duration = 1500) {
-    
     if (currentSubtitles.length === 0 || !pageHasVideo) {
         return; 
     }
@@ -547,7 +670,7 @@ function showOSD(message, duration = 1500) {
 }
 
 // ==========================================
-// 9. KEYBOARD SHORTCUTS
+// 9. KEYBOARD SHORTCUTS (Unchanged & Stable)
 // ==========================================
 document.addEventListener('keydown', function (e) {
     const activeTag = document.activeElement.tagName;
@@ -596,7 +719,7 @@ document.addEventListener('keydown', function (e) {
         showMessage = `Font: ${newSize}px`;
     } else if (key === 'c') {
         e.preventDefault();
-        const colors = ['#ffffff', '#ffff00', '#00ffff', '#ff00ff', '#00ff00'];
+        const colors = ['#ffffff', '#ffff00', '#00ffff', '#00ff00'];
         let currentIdx = colors.indexOf(userSettings.textColor);
         userSettings.textColor = colors[(currentIdx + 1) % colors.length];
         saveSettings(); saveMovieSpecificSettings();
@@ -625,7 +748,14 @@ window.addEventListener('beforeunload', () => {
 });
 
 document.addEventListener('visibilitychange', function() {
-    if (document.hidden) cleanupIfNoVideo();
+    if (document.hidden) {
+        cleanupIfNoVideo();
+    } else {
+        // When coming back to the tab, re-evaluate safely
+        if (currentSubtitles.length > 0 && !isPageInitialized) {
+            setupVideoObserver();
+        }
+    }
 });
 
 let lastUrl = location.href;
@@ -634,7 +764,10 @@ new MutationObserver(() => {
     if (url !== lastUrl) {
         lastUrl = url;
         cleanupIfNoVideo();
-        // Re-check for video on new URL
-        if (currentSubtitles.length > 0) setupVideoObserver();
+        if (currentSubtitles.length > 0) {
+            // Allow re-initialization on URL change (SPA navigation)
+            isPageInitialized = false; 
+            setupVideoObserver();
+        }
     }
 }).observe(document, { subtree: true, childList: true });
