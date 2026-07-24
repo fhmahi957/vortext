@@ -51,34 +51,55 @@
                     <button id="syncReset" class="sync-btn reset">↺</button>
                 </div>
             </div>
-
+            <!-- Text color section -->
             <div class="control-section">
                 <div class="control-header">
                     <span>Text Color</span>
                     <input type="color" id="textColor" class="color-picker">
                 </div>
             </div>
-
+            <!-- Background color section -->
             <div class="control-section">
                 <div class="control-header">
                     <span>Background</span>
                     <input type="color" id="bgColor" class="color-picker">
                 </div>
             </div>
-
+            <!-- Font Size section -->
             <div class="control-section">
                 <div class="control-header">
                     <span>Font Size: <span id="fontSizeVal">20</span>px</span>
                 </div>
                 <input type="range" id="fontSize" min="12" max="48" class="slider">
             </div>
+
+
+            <div class="control-section">
+    <div class="control-header">
+        <span>Background Opacity: <span id="opacityVal">80</span>%</span>
+    </div>
+    <input type="range" id="opacitySlider" min="0" max="100" value="80" class="slider">
+    <p style="font-size: 10px; color: #666; margin: 5px 0 0 0;">0% = Fully Transparent</p>
+</div>
+
+            <div class="=control-section">
+                <div class="control-header">
+                    <span>Position</span>
+                </div>
+                <div class="position-controls">
+                    <button id="posUp" class="pos-btn">↑</button>
+                    <button id="posDown" class="pos-btn">↓</button>
+                    <button id="posReset" class="pos-btn reset">↺</button>
+                </div>
+            </div>
             
-            <div class="shortcuts-hint">
+            <!-- keyboard shortcuts are now displayed in the popup for better accessibility. -->
+            <!-- <div class="shortcuts-hint">
                 <p><strong>Shortcuts:</strong><br>
                 [ / ] : ±0.1s | Shift+[ / ] : ±0.5s<br>
                 Ctrl+[ / ] : ±2s | Alt+[ / ] : ±10s<br>
                 S : Toggle | +/- : Size | C : Color</p>
-            </div>
+            </div> -->
         </div>
     </div>
 
