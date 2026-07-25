@@ -139,6 +139,38 @@ document.addEventListener('DOMContentLoaded', function () {
         saveSettings();
     });
 
+    // Opacity Slider
+const opacitySlider = document.getElementById('opacitySlider');
+const opacityVal = document.getElementById('opacityVal');
+
+if (opacitySlider && opacityVal) {
+    // Load saved opacity
+    chrome.storage.local.get('vortextSettings', function(data) {
+        if (data.vortextSettings && data.vortextSettings.bgOpacity !== undefined) {
+            opacitySlider.value = data.vortextSettings.bgOpacity;
+            opacityVal.textContent = data.vortextSettings.bgOpacity;
+        }
+    });
+    
+    opacitySlider.addEventListener('input', (e) => {
+        const opacity = parseInt(e.target.value);
+        opacityVal.textContent = opacity;
+        
+        // Convert to decimal (0 to 1)
+        const opacityDecimal = opacity / 100;
+        
+        // Update background color with new opacity
+        const hex = currentSettings.bgColorHex;
+        const r = parseInt(hex.slice(1, 3), 16);
+        const g = parseInt(hex.slice(3, 5), 16);
+        const b = parseInt(hex.slice(5, 7), 16);
+        currentSettings.bgColor = `rgba(${r}, ${g}, ${b}, ${opacityDecimal})`;
+        currentSettings.bgOpacity = opacity;
+        
+        saveSettings();
+    });
+}
+
     // Drag & Drop for .srt files
     dropZone.addEventListener('dragover', (e) => {
         e.preventDefault();

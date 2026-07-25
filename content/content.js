@@ -19,6 +19,7 @@ let userSettings = {
     textColor: '#ffffff',
     bgColorHex: '#000000',
     bgColor: 'rgba(0, 0, 0, 0.8)',
+    bgOpacity: 80,
     fontSize: '20',
     syncOffset: 0,
     isOverlayVisible: true
@@ -100,7 +101,7 @@ function saveSettings() {
 }
 
 // ==========================================
-// 4. CLEANUP FUNCTIONS (Safe & Predictable)
+// 4. CLEANUP FUNCTIONS (Bulletproof)
 // ==========================================
 function cleanupAll() {
     if (subtitleDiv) { subtitleDiv.remove(); subtitleDiv = null; }
@@ -111,12 +112,17 @@ function cleanupAll() {
     currentSubtitles = [];
     videoElement = null;
     pageHasVideo = false;
-    isPageInitialized = false; // Reset for next valid page
+    isPageInitialized = false; // CRITICAL: Reset flag
     
     if (observerTimeout) {
         clearTimeout(observerTimeout);
         observerTimeout = null;
     }
+    
+    // Clear video setup flags
+    document.querySelectorAll('video[data-vortextsetup="true"]').forEach(video => {
+        delete video.dataset.vortextSetup;
+    });
 }
 
 function cleanupIfNoVideo() {
@@ -129,12 +135,11 @@ function cleanupIfNoVideo() {
         if (controlBar) { controlBar.remove(); controlBar = null; }
         if (settingsPanel) { settingsPanel.remove(); settingsPanel = null; }
         if (subtitleDiv) { 
-            subtitleDiv.style.display = 'none';
-            // Reset manual positioning
-            delete subtitleDiv.dataset.manuallyPositioned;
+            subtitleDiv.remove(); // COMPLETELY REMOVE, don't just hide
+            subtitleDiv = null; 
         }
         
-        isPageInitialized = false;
+        isPageInitialized = false; // CRITICAL: Allow re-evaluation
         
         document.querySelectorAll('video[data-vortextsetup="true"]').forEach(video => {
             delete video.dataset.vortextSetup;
@@ -186,20 +191,22 @@ function parseSRT(srtContent) {
 }
 
 // ==========================================
-// 6. OVERLAY & OBSERVER LOGIC (THE CORE FIX)
+// 6. OVERLAY & OBSERVER LOGIC (The Core Fix)
 // ==========================================
 function initializeSubtitleOverlay(subtitleData) {
+    // Nuke any existing UI from previous pages first!
+    cleanupAll(); 
+    
     try {
         currentSubtitles = parseSRT(subtitleData.content);
         currentMovieName = subtitleData.movieName;
-        isPageInitialized = false; // Reset flag for new subtitle
+        isPageInitialized = false; // Reset for new subtitle
         
         setupVideoObserver();
         
         const observer = new MutationObserver(() => {
-            // Debounce: Wait 500ms after DOM stops changing before checking
             if (observerTimeout) clearTimeout(observerTimeout);
-            observerTimeout = setTimeout(setupVideoObserver, 500);
+            observerTimeout = setTimeout(setupVideoObserver, 500); // 500ms debounce
         });
         observer.observe(document.body, { childList: true, subtree: true });
         
@@ -296,21 +303,22 @@ function createSubtitleOverlay(video) {
         display: ${userSettings.isOverlayVisible ? 'block' : 'none'};
         max-width: 90%;
         width: auto;
-        pointer-events: auto; /* Changed from none to allow dragging */
+        pointer-events: auto; /* Allows dragging */
         font-family: Arial, sans-serif;
         text-shadow: 1px 1px 3px rgba(0,0,0,0.8);
         white-space: pre-line;
         bottom: 60px;
-        cursor: move; /* Show move cursor */
+        cursor: move; /* Shows drag cursor */
         user-select: none;
-        transition: none; /* Remove transition for smooth dragging */
+        transition: none;
+        background-color: ${userSettings.bgColor};
     `;
     
     applySettings();
     document.body.appendChild(subtitleDiv);
     updateOverlayPosition();
     
-    // Drag functionality
+    // --- DRAG FUNCTIONALITY ---
     let isDragging = false;
     let startX, startY, initialLeft, initialBottom;
     
@@ -333,27 +341,22 @@ function createSubtitleOverlay(video) {
         const deltaX = e.clientX - startX;
         const deltaY = e.clientY - startY;
         
-        // Calculate new position
         const newLeft = initialLeft + deltaX;
         const newBottom = initialBottom - deltaY;
         
-        // Apply new position
         subtitleDiv.style.left = `${newLeft + (subtitleDiv.offsetWidth / 2)}px`;
         subtitleDiv.style.transform = 'translateX(-50%)';
         subtitleDiv.style.bottom = `${newBottom}px`;
         
-        // Mark as manually positioned
         subtitleDiv.dataset.manuallyPositioned = 'true';
     });
     
     document.addEventListener('mouseup', () => {
         if (isDragging) {
             isDragging = false;
-            // Save position to storage
             const rect = subtitleDiv.getBoundingClientRect();
             const videoRect = videoElement.getBoundingClientRect();
             
-            // Save relative position
             const relativeX = ((rect.left - videoRect.left) / videoRect.width) * 100;
             const relativeY = ((window.innerHeight - rect.bottom) / videoRect.height) * 100;
             
@@ -366,6 +369,7 @@ function createSubtitleOverlay(video) {
             });
         }
     });
+    // ----------------------------
     
     video.addEventListener('timeupdate', updateOverlayPosition);
     window.addEventListener('resize', updateOverlayPosition);
@@ -390,8 +394,7 @@ function createSubtitleOverlay(video) {
         } else {
             document.body.appendChild(subtitleDiv);
             subtitleDiv.style.position = 'fixed';
-            // Restore position after fullscreen
-            setTimeout(updateOverlayPosition, 100);
+            setTimeout(updateOverlayPosition, 100); // Restore position after exit
         }
     }
     
@@ -427,13 +430,9 @@ function updateOverlayPosition() {
     
     const rect = videoElement.getBoundingClientRect();
     const viewportHeight = window.innerHeight;
-    
-    // Calculate responsive bottom position
     const bottomOffset = Math.max(60, viewportHeight - rect.bottom);
     
-    // Only update if not in fullscreen
-    const fullscreenElement = document.fullscreenElement || 
-                              document.webkitFullscreenElement;
+    const fullscreenElement = document.fullscreenElement || document.webkitFullscreenElement;
     
     if (!fullscreenElement) {
         subtitleDiv.style.bottom = `${bottomOffset}px`;
@@ -515,42 +514,54 @@ function createSettingsPanel() {
         padding: 20px; font-family: Arial, sans-serif; color: white;
     `;
     
+    const opacity = userSettings.bgOpacity || 80;
+    
     settingsPanel.innerHTML = `
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; border-bottom: 1px solid #0f3460; padding-bottom: 15px;">
             <h2 style="color: #00d9ff; margin: 0; font-size: 20px;">⚙️ Settings</h2>
             <button id="closeSettings" style="background: transparent; border: none; color: white; font-size: 24px; cursor: pointer;">&times;</button>
         </div>
+        
+        <!-- Simplified Sync Offset -->
         <div style="margin-bottom: 20px;">
             <div style="color: #ccc; font-size: 13px; margin-bottom: 8px;">Sync Offset</div>
-            <div style="display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px;">
-                <button class="v-sync-btn" data-val="-10">-10s</button>
-                <button class="v-sync-btn" data-val="-5">-5s</button>
-                <button class="v-sync-btn" data-val="-2">-2s</button>
-                <button class="v-sync-btn" data-val="-0.5">-0.5s</button>
-                <button class="v-sync-btn" data-val="-0.1">-0.1s</button>
+            <div style="display: flex; gap: 8px; align-items: center; margin-bottom: 10px;">
+                <button id="syncMinus" style="background: #0f3460; color: white; border: 1px solid #00d9ff; padding: 6px 12px; border-radius: 4px; cursor: pointer; font-size: 12px; font-weight: bold;">-0.1s</button>
+                <span id="syncValue" style="color: #00d9ff; font-weight: bold; min-width: 50px; text-align: center; font-size: 14px;">0.0s</span>
+                <button id="syncPlus" style="background: #0f3460; color: white; border: 1px solid #00d9ff; padding: 6px 12px; border-radius: 4px; cursor: pointer; font-size: 12px; font-weight: bold;">+0.1s</button>
+                <button id="syncReset" style="background: transparent; color: #888; border: 1px solid #888; padding: 6px 10px; border-radius: 4px; cursor: pointer; font-size: 14px;">↺</button>
             </div>
-            <div style="text-align: center; color: #00d9ff; font-weight: bold; font-size: 16px; margin: 10px 0;" id="syncValue">0.0s</div>
-            <div style="display: flex; gap: 8px; flex-wrap: wrap;">
-                <button class="v-sync-btn" data-val="0.1">+0.1s</button>
-                <button class="v-sync-btn" data-val="0.5">+0.5s</button>
-                <button class="v-sync-btn" data-val="2">+2s</button>
-                <button class="v-sync-btn" data-val="5">+5s</button>
-                <button class="v-sync-btn" data-val="10">+10s</button>
-            </div>
-            <button id="syncReset" style="width: 100%; margin-top: 10px; background: #0f3460; color: white; border: 1px solid #888; padding: 8px; border-radius: 4px; cursor: pointer;">↺ Reset to 0</button>
         </div>
+        
+        <!-- Text Color -->
         <div style="margin-bottom: 20px;">
             <div style="color: #ccc; font-size: 13px; margin-bottom: 8px;">Text Color</div>
             <input type="color" id="textColorPicker" value="${userSettings.textColor}" style="width: 100%; height: 40px; border: none; cursor: pointer;">
         </div>
+        
+        <!-- Background Color -->
         <div style="margin-bottom: 20px;">
             <div style="color: #ccc; font-size: 13px; margin-bottom: 8px;">Background Color</div>
             <input type="color" id="bgColorPicker" value="${userSettings.bgColorHex}" style="width: 100%; height: 40px; border: none; cursor: pointer;">
         </div>
+        
+        <!-- Opacity Slider -->
+        <div style="margin-bottom: 20px;">
+            <div style="color: #ccc; font-size: 13px; margin-bottom: 8px;">Background Opacity: <span id="opacityDisplay">${opacity}</span>%</div>
+            <input type="range" id="opacitySlider" min="0" max="100" value="${opacity}" style="width: 100%;">
+            <div style="display: flex; justify-content: space-between; font-size: 10px; color: #666; margin-top: 4px;">
+                <span>Transparent</span>
+                <span>Solid</span>
+            </div>
+        </div>
+        
+        <!-- Font Size -->
         <div style="margin-bottom: 20px;">
             <div style="color: #ccc; font-size: 13px; margin-bottom: 8px;">Font Size: <span id="fontSizeDisplay">${userSettings.fontSize}</span>px</div>
             <input type="range" id="fontSizeSlider" min="12" max="48" value="${userSettings.fontSize}" style="width: 100%;">
         </div>
+        
+        <!-- Keyboard Shortcuts Info -->
         <div style="margin-top: 30px; padding-top: 20px; border-top: 1px solid #0f3460; color: #888; font-size: 11px; line-height: 1.6;">
             <strong style="color: #00d9ff;">Keyboard Shortcuts:</strong><br>
             [ / ] : ±0.1s | Shift + [ / ] : ±0.5s<br>
@@ -560,26 +571,51 @@ function createSettingsPanel() {
     `;
     
     const style = document.createElement('style');
-    style.textContent = `.v-sync-btn { background: #0f3460; color: white; border: 1px solid #00d9ff; padding: 6px 10px; border-radius: 4px; cursor: pointer; font-size: 11px; flex: 1; } .v-sync-btn:hover { background: #00d9ff; color: #1a1a2e; }`;
+    style.textContent = `
+        input[type="range"] { cursor: pointer; }
+        input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 16px;
+            height: 16px;
+            background: #00d9ff;
+            cursor: pointer;
+            border-radius: 50%;
+        }
+        input[type="range"]::-moz-range-thumb {
+            width: 16px;
+            height: 16px;
+            background: #00d9ff;
+            cursor: pointer;
+            border-radius: 50%;
+            border: none;
+        }
+    `;
     settingsPanel.appendChild(style);
     
     document.body.appendChild(settingsPanel);
     setupSettingsPanelListeners();
-}
+} 
 
 function setupSettingsPanelListeners() {
     document.getElementById('closeSettings').onclick = () => toggleSettingsPanel();
     
-    document.querySelectorAll('.v-sync-btn').forEach(btn => {
-        btn.onclick = () => {
-            const val = parseFloat(btn.getAttribute('data-val'));
-            userSettings.syncOffset = parseFloat((userSettings.syncOffset + val).toFixed(1));
-            updateSyncDisplay();
-            saveSettings();
-            saveMovieSpecificSettings();
-            showOSD(`Sync: ${userSettings.syncOffset > 0 ? '+' : ''}${userSettings.syncOffset}s`);
-        };
-    });
+    // Simplified Sync Controls
+    document.getElementById('syncMinus').onclick = () => {
+        userSettings.syncOffset = parseFloat((userSettings.syncOffset - 0.1).toFixed(1));
+        updateSyncDisplay();
+        saveSettings();
+        saveMovieSpecificSettings();
+        showOSD(`Sync: ${userSettings.syncOffset > 0 ? '+' : ''}${userSettings.syncOffset}s`);
+    };
+    
+    document.getElementById('syncPlus').onclick = () => {
+        userSettings.syncOffset = parseFloat((userSettings.syncOffset + 0.1).toFixed(1));
+        updateSyncDisplay();
+        saveSettings();
+        saveMovieSpecificSettings();
+        showOSD(`Sync: ${userSettings.syncOffset > 0 ? '+' : ''}${userSettings.syncOffset}s`);
+    };
     
     document.getElementById('syncReset').onclick = () => {
         userSettings.syncOffset = 0;
@@ -589,21 +625,46 @@ function setupSettingsPanelListeners() {
         showOSD('Sync Reset to 0');
     };
     
+    // Text Color
     document.getElementById('textColorPicker').oninput = (e) => {
         userSettings.textColor = e.target.value;
         saveSettings(); saveMovieSpecificSettings(); applySettings();
     };
     
+    // Background Color
     document.getElementById('bgColorPicker').oninput = (e) => {
         const hex = e.target.value;
         userSettings.bgColorHex = hex;
         const r = parseInt(hex.slice(1, 3), 16);
         const g = parseInt(hex.slice(3, 5), 16);
         const b = parseInt(hex.slice(5, 7), 16);
-        userSettings.bgColor = `rgba(${r}, ${g}, ${b}, 0.8)`;
+        const opacity = userSettings.bgOpacity !== undefined ? (userSettings.bgOpacity / 100) : 0.8;
+        userSettings.bgColor = `rgba(${r}, ${g}, ${b}, ${opacity})`;
         saveSettings(); saveMovieSpecificSettings(); applySettings();
     };
     
+    // Opacity Slider
+    const opacitySlider = document.getElementById('opacitySlider');
+    const opacityDisplay = document.getElementById('opacityDisplay');
+    
+    opacitySlider.oninput = (e) => {
+        const opacityPercent = parseInt(e.target.value);
+        opacityDisplay.textContent = opacityPercent;
+        
+        userSettings.bgOpacity = opacityPercent;
+        
+        const hex = userSettings.bgColorHex;
+        const r = parseInt(hex.slice(1, 3), 16);
+        const g = parseInt(hex.slice(3, 5), 16);
+        const b = parseInt(hex.slice(5, 7), 16);
+        const opacityDecimal = opacityPercent / 100;
+        
+        userSettings.bgColor = `rgba(${r}, ${g}, ${b}, ${opacityDecimal})`;
+        
+        saveSettings(); saveMovieSpecificSettings(); applySettings();
+    };
+    
+    // Font Size
     document.getElementById('fontSizeSlider').oninput = (e) => {
         userSettings.fontSize = e.target.value;
         document.getElementById('fontSizeDisplay').textContent = e.target.value;
@@ -670,7 +731,7 @@ function showOSD(message, duration = 1500) {
 }
 
 // ==========================================
-// 9. KEYBOARD SHORTCUTS (Unchanged & Stable)
+// 9. KEYBOARD SHORTCUTS
 // ==========================================
 document.addEventListener('keydown', function (e) {
     const activeTag = document.activeElement.tagName;
@@ -719,7 +780,7 @@ document.addEventListener('keydown', function (e) {
         showMessage = `Font: ${newSize}px`;
     } else if (key === 'c') {
         e.preventDefault();
-        const colors = ['#ffffff', '#ffff00', '#00ffff', '#00ff00'];
+        const colors = ['#ffffff', '#ffff00', '#00ffff', '#ff00ff', '#00ff00'];
         let currentIdx = colors.indexOf(userSettings.textColor);
         userSettings.textColor = colors[(currentIdx + 1) % colors.length];
         saveSettings(); saveMovieSpecificSettings();
@@ -751,7 +812,6 @@ document.addEventListener('visibilitychange', function() {
     if (document.hidden) {
         cleanupIfNoVideo();
     } else {
-        // When coming back to the tab, re-evaluate safely
         if (currentSubtitles.length > 0 && !isPageInitialized) {
             setupVideoObserver();
         }
@@ -763,10 +823,9 @@ new MutationObserver(() => {
     const url = location.href;
     if (url !== lastUrl) {
         lastUrl = url;
-        cleanupIfNoVideo();
+        cleanupIfNoVideo(); // Clean up old page
         if (currentSubtitles.length > 0) {
-            // Allow re-initialization on URL change (SPA navigation)
-            isPageInitialized = false; 
+            isPageInitialized = false; // Force re-evaluation for new URL
             setupVideoObserver();
         }
     }
