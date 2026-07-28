@@ -11,8 +11,9 @@ let settingsPanel = null;
 let osdElement = null;
 let currentMovieName = null;
 let pageHasVideo = false;
-let isPageInitialized = false; // Prevents infinite loops and flickering
-let observerTimeout = null;    // For debouncing DOM changes
+let isPageInitialized = false;
+let observerTimeout = null;
+let mutationObserver = null;
 
 // Default Settings
 let userSettings = {
@@ -25,7 +26,6 @@ let userSettings = {
     isOverlayVisible: true
 };
 
-// Per-movie sync memory
 let movieSyncMemory = {};
 
 // ==========================================
@@ -44,7 +44,6 @@ function loadSettings() {
 
 loadSettings();
 
-// Listen for storage changes
 chrome.storage.onChanged.addListener(function (changes, namespace) {
     if (namespace === 'local') {
         if (changes.currentSubtitle) {
@@ -60,11 +59,13 @@ chrome.storage.onChanged.addListener(function (changes, namespace) {
         if (changes.vortextSettings) {
             userSettings = { ...userSettings, ...changes.vortextSettings.newValue };
             applySettings();
+            if (currentMovieName) {
+                saveMovieSpecificSettings();
+            }
         }
     }
 });
 
-// Initial load check
 chrome.storage.local.get('currentSubtitle', function (data) {
     if (data.currentSubtitle) {
         currentMovieName = data.currentSubtitle.movieName;
@@ -101,7 +102,7 @@ function saveSettings() {
 }
 
 // ==========================================
-// 4. CLEANUP FUNCTIONS (Bulletproof)
+// 4. CLEANUP FUNCTIONS
 // ==========================================
 function cleanupAll() {
     if (subtitleDiv) { subtitleDiv.remove(); subtitleDiv = null; }
@@ -112,14 +113,18 @@ function cleanupAll() {
     currentSubtitles = [];
     videoElement = null;
     pageHasVideo = false;
-    isPageInitialized = false; // CRITICAL: Reset flag
+    isPageInitialized = false;
     
     if (observerTimeout) {
         clearTimeout(observerTimeout);
         observerTimeout = null;
     }
+    // FIX: Disconnect observer to prevent memory leaks and stacking
+    if (mutationObserver) {
+        mutationObserver.disconnect();
+        mutationObserver = null;
+    }
     
-    // Clear video setup flags
     document.querySelectorAll('video[data-vortextsetup="true"]').forEach(video => {
         delete video.dataset.vortextSetup;
     });
@@ -135,11 +140,11 @@ function cleanupIfNoVideo() {
         if (controlBar) { controlBar.remove(); controlBar = null; }
         if (settingsPanel) { settingsPanel.remove(); settingsPanel = null; }
         if (subtitleDiv) { 
-            subtitleDiv.remove(); // COMPLETELY REMOVE, don't just hide
+            subtitleDiv.remove(); 
             subtitleDiv = null; 
         }
         
-        isPageInitialized = false; // CRITICAL: Allow re-evaluation
+        isPageInitialized = false; 
         
         document.querySelectorAll('video[data-vortextsetup="true"]').forEach(video => {
             delete video.dataset.vortextSetup;
@@ -169,21 +174,32 @@ function timeToSeconds(timeStr) {
 
 function parseSRT(srtContent) {
     const subtitles = [];
-    const cleanContent = detectAndFixBanglaEncoding(srtContent);
+    const cleanContent = detectAndFixBanglaEncoding(srtContent).replace(/\r\n/g, '\n').replace(/\r/g, '\n');
     const blocks = cleanContent.trim().split(/\n\s*\n/);
     
     blocks.forEach(block => {
         const lines = block.trim().split('\n');
-        if (lines.length >= 3) {
-            const timeLine = lines[1];
-            const text = lines.slice(2).join('\n').replace(/<[^>]*>/g, '');
-            const timeMatch = timeLine.match(/(\d{2}:\d{2}:\d{2},\d{3}) --> (\d{2}:\d{2}:\d{2},\d{3})/);
-            if (timeMatch) {
-                subtitles.push({
-                    startTime: timeToSeconds(timeMatch[1]),
-                    endTime: timeToSeconds(timeMatch[2]),
-                    text: text
-                });
+        if (lines.length >= 2) { 
+            let timeLineIndex = -1;
+            for (let i = 0; i < lines.length; i++) {
+                if (lines[i].match(/\d{2}:\d{2}:\d{2},\d{3}\s*-->\s*\d{2}:\d{2}:\d{2},\d{3}/)) {
+                    timeLineIndex = i;
+                    break;
+                }
+            }
+            
+            if (timeLineIndex !== -1 && timeLineIndex < lines.length - 1) {
+                const timeLine = lines[timeLineIndex];
+                const text = lines.slice(timeLineIndex + 1).join('\n').replace(/<[^>]*>/g, '').trim();
+                const timeMatch = timeLine.match(/(\d{2}:\d{2}:\d{2},\d{3})\s*-->\s*(\d{2}:\d{2}:\d{2},\d{3})/);
+                
+                if (timeMatch) {
+                    subtitles.push({
+                        startTime: timeToSeconds(timeMatch[1]),
+                        endTime: timeToSeconds(timeMatch[2]),
+                        text: text
+                    });
+                }
             }
         }
     });
@@ -191,26 +207,46 @@ function parseSRT(srtContent) {
 }
 
 // ==========================================
-// 6. OVERLAY & OBSERVER LOGIC (The Core Fix)
+// 6. OVERLAY & OBSERVER LOGIC
 // ==========================================
 function initializeSubtitleOverlay(subtitleData) {
-    // Nuke any existing UI from previous pages first!
     cleanupAll(); 
-    
     try {
         currentSubtitles = parseSRT(subtitleData.content);
+        
+        if (currentSubtitles.length === 0) {
+            showOSD('Error: Invalid or empty subtitle file');
+            return;
+        }
+
         currentMovieName = subtitleData.movieName;
-        isPageInitialized = false; // Reset for new subtitle
+        isPageInitialized = false; 
         
         setupVideoObserver();
         
-        const observer = new MutationObserver(() => {
-            if (observerTimeout) clearTimeout(observerTimeout);
-            observerTimeout = setTimeout(setupVideoObserver, 500); // 500ms debounce
+        // FIX 1 & 2: Observe 'attributes' on VIDEO tags to catch dynamic 'src' loading
+        const observer = new MutationObserver((mutations) => {
+            const videoChanged = mutations.some(mutation => {
+                if (mutation.type === 'childList') {
+                    return Array.from(mutation.addedNodes).some(node => node.tagName === 'VIDEO') ||
+                           Array.from(mutation.removedNodes).some(node => node.tagName === 'VIDEO');
+                }
+                if (mutation.type === 'attributes' && mutation.target.tagName === 'VIDEO') {
+                    return true; // Catches dynamic src/readyState changes!
+                }
+                return false;
+            });
+            
+            if (videoChanged) {
+                if (observerTimeout) clearTimeout(observerTimeout);
+                observerTimeout = setTimeout(setupVideoObserver, 500);
+            }
         });
-        observer.observe(document.body, { childList: true, subtree: true });
         
-        showOSD(`Loaded: ${subtitleData.movieName}`);
+        observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['src', 'readyState', 'style'] });
+        mutationObserver = observer;
+        
+        // FIX 3: Do NOT show OSD here. Wait until a video is actually found to prevent tab flickering.
     } catch (error) {
         console.error('Error initializing subtitle overlay:', error);
         showOSD('Error loading subtitles');
@@ -218,27 +254,34 @@ function initializeSubtitleOverlay(subtitleData) {
 }
 
 function setupVideoObserver() {
-    // Guard 1: No subtitle loaded? Do nothing.
     if (currentSubtitles.length === 0) {
         cleanupIfNoVideo();
         return;
     }
 
-    // Guard 2: Already initialized on this page? Do nothing (Prevents flickering).
-    if (isPageInitialized) {
+    if (isPageInitialized && videoElement && document.body.contains(videoElement)) {
         return;
+    }
+
+    if (isPageInitialized && (!videoElement || !document.body.contains(videoElement))) {
+        isPageInitialized = false;
+        if (videoElement) {
+            delete videoElement.dataset.vortextSetup;
+            videoElement = null;
+        }
+        cleanupAll(); 
     }
 
     const allVideos = document.querySelectorAll('video');
     let validVideoFound = false;
 
     for (let video of allVideos) {
-        // Guard 3: Strict visibility and size check (ignores 1x1 hidden tracking videos)
         const rect = video.getBoundingClientRect();
         const isLargeEnough = rect.width > 50 && rect.height > 50;
         const style = window.getComputedStyle(video);
         const isNotHidden = style.display !== 'none' && style.visibility !== 'hidden';
-        const hasSource = video.src || video.querySelector('source');
+        // FIX: Also check readyState > 0 for dynamically loaded videos
+        const hasSource = video.src || video.querySelector('source') || video.readyState > 0;
 
         if (isLargeEnough && isNotHidden && hasSource && !video.dataset.vortextSetup) {
             video.dataset.vortextSetup = 'true';
@@ -249,12 +292,15 @@ function setupVideoObserver() {
             createSubtitleOverlay(video);
             createControlBar(video);
             
-            isPageInitialized = true; // Lock it! No more re-runs on this page.
-            break; // Stop checking after finding the first valid video
+            isPageInitialized = true; 
+            
+            // FIX 3: Only show OSD when we successfully attach to a video!
+            showOSD(`Loaded: ${currentMovieName}`);
+            
+            break; 
         }
     }
 
-    // Check inside iframes (only if not initialized yet)
     if (!isPageInitialized) {
         document.querySelectorAll('iframe').forEach(iframe => {
             try {
@@ -262,7 +308,11 @@ function setupVideoObserver() {
                 const iframeVideos = iframeDoc.querySelectorAll('video');
                 for (let video of iframeVideos) {
                     const rect = video.getBoundingClientRect();
-                    if (rect.width > 50 && rect.height > 50 && !video.dataset.vortextSetup) {
+                    const style = window.getComputedStyle(video);
+                    const isNotHidden = style.display !== 'none' && style.visibility !== 'hidden';
+                    const hasSource = video.src || video.querySelector('source') || video.readyState > 0;
+                    
+                    if (rect.width > 50 && rect.height > 50 && isNotHidden && hasSource && !video.dataset.vortextSetup) {
                         video.dataset.vortextSetup = 'true';
                         videoElement = video;
                         pageHasVideo = true;
@@ -272,6 +322,7 @@ function setupVideoObserver() {
                         createControlBar(video);
                         
                         isPageInitialized = true;
+                        showOSD(`Loaded: ${currentMovieName}`);
                         break;
                     }
                 }
@@ -283,7 +334,7 @@ function setupVideoObserver() {
 
     if (!validVideoFound) {
         pageHasVideo = false;
-        cleanupIfNoVideo();
+        cleanupIfNoVideo(); // Restored to prevent stale UI state
     }
 }
 
@@ -303,12 +354,12 @@ function createSubtitleOverlay(video) {
         display: ${userSettings.isOverlayVisible ? 'block' : 'none'};
         max-width: 90%;
         width: auto;
-        pointer-events: auto; /* Allows dragging */
+        pointer-events: auto;
         font-family: Arial, sans-serif;
         text-shadow: 1px 1px 3px rgba(0,0,0,0.8);
         white-space: pre-line;
         bottom: 60px;
-        cursor: move; /* Shows drag cursor */
+        cursor: move;
         user-select: none;
         transition: none;
         background-color: ${userSettings.bgColor};
@@ -318,20 +369,19 @@ function createSubtitleOverlay(video) {
     document.body.appendChild(subtitleDiv);
     updateOverlayPosition();
     
-    // --- DRAG FUNCTIONALITY ---
     let isDragging = false;
     let startX, startY, initialLeft, initialBottom;
     
     subtitleDiv.addEventListener('mousedown', (e) => {
         isDragging = true;
+        subtitleDiv.dataset.isDragging = 'true'; // CRITICAL FIX: Block position updates
         startX = e.clientX;
         startY = e.clientY;
-        
         const rect = subtitleDiv.getBoundingClientRect();
         initialLeft = rect.left;
         initialBottom = window.innerHeight - rect.bottom;
-        
         subtitleDiv.style.transition = 'none';
+        subtitleDiv.style.cursor = 'grabbing';
         e.preventDefault();
     });
     
@@ -340,42 +390,38 @@ function createSubtitleOverlay(video) {
         
         const deltaX = e.clientX - startX;
         const deltaY = e.clientY - startY;
-        
         const newLeft = initialLeft + deltaX;
         const newBottom = initialBottom - deltaY;
         
         subtitleDiv.style.left = `${newLeft + (subtitleDiv.offsetWidth / 2)}px`;
         subtitleDiv.style.transform = 'translateX(-50%)';
         subtitleDiv.style.bottom = `${newBottom}px`;
-        
         subtitleDiv.dataset.manuallyPositioned = 'true';
     });
     
     document.addEventListener('mouseup', () => {
         if (isDragging) {
             isDragging = false;
+            subtitleDiv.dataset.isDragging = 'false'; // CRITICAL FIX: Allow position updates again
+            subtitleDiv.style.cursor = 'move';
+            
             const rect = subtitleDiv.getBoundingClientRect();
             const videoRect = videoElement.getBoundingClientRect();
             
-            const relativeX = ((rect.left - videoRect.left) / videoRect.width) * 100;
-            const relativeY = ((window.innerHeight - rect.bottom) / videoRect.height) * 100;
-            
             chrome.storage.local.set({
                 subtitlePosition: {
-                    x: relativeX,
-                    y: relativeY,
+                    x: ((rect.left - videoRect.left) / videoRect.width) * 100,
+                    y: ((window.innerHeight - rect.bottom) / videoRect.height) * 100,
                     movieName: currentMovieName
                 }
             });
         }
     });
-    // ----------------------------
     
     video.addEventListener('timeupdate', updateOverlayPosition);
     window.addEventListener('resize', updateOverlayPosition);
     window.addEventListener('scroll', updateOverlayPosition);
     
-    // Fullscreen handlers
     function handleFullscreenChange() {
         if (!subtitleDiv) return;
         const fullscreenElement = document.fullscreenElement || 
@@ -394,7 +440,7 @@ function createSubtitleOverlay(video) {
         } else {
             document.body.appendChild(subtitleDiv);
             subtitleDiv.style.position = 'fixed';
-            setTimeout(updateOverlayPosition, 100); // Restore position after exit
+            setTimeout(updateOverlayPosition, 100);
         }
     }
     
@@ -423,18 +469,30 @@ function createSubtitleOverlay(video) {
 function updateOverlayPosition() {
     if (!videoElement || !subtitleDiv) return;
     
-    // If manually positioned, don't auto-adjust
-    if (subtitleDiv.dataset.manuallyPositioned === 'true') {
+    if (subtitleDiv.dataset.isDragging === 'true') {
         return;
     }
     
     const rect = videoElement.getBoundingClientRect();
     const viewportHeight = window.innerHeight;
-    const bottomOffset = Math.max(60, viewportHeight - rect.bottom);
-    
     const fullscreenElement = document.fullscreenElement || document.webkitFullscreenElement;
     
-    if (!fullscreenElement) {
+    if (fullscreenElement) return;
+    
+    if (subtitleDiv.dataset.manuallyPositioned === 'true') {
+        chrome.storage.local.get('subtitlePosition', function(data) {
+            if (data.subtitlePosition && data.subtitlePosition.movieName === currentMovieName) {
+                const subWidth = subtitleDiv.offsetWidth || 0;
+                const targetLeft = rect.left + (rect.width * (data.subtitlePosition.x / 100)) + (subWidth / 2);
+                const distFromVideoBottom = rect.height * (data.subtitlePosition.y / 100);
+                const targetBottom = window.innerHeight - rect.bottom + distFromVideoBottom;
+                
+                subtitleDiv.style.left = `${targetLeft}px`;
+                subtitleDiv.style.bottom = `${targetBottom}px`;
+            }
+        });
+    } else {
+        const bottomOffset = Math.max(60, viewportHeight - rect.bottom);
         subtitleDiv.style.bottom = `${bottomOffset}px`;
         subtitleDiv.style.left = `${rect.left + (rect.width / 2)}px`;
     }
@@ -445,28 +503,37 @@ function applySettings() {
     subtitleDiv.style.color = userSettings.textColor;
     subtitleDiv.style.backgroundColor = userSettings.bgColor;
     subtitleDiv.style.fontSize = `${userSettings.fontSize}px`;
+    
+    if (userSettings.isOverlayVisible) {
+        if (videoElement && currentSubtitles.length > 0) {
+            const adjustedTime = videoElement.currentTime + userSettings.syncOffset;
+            const activeSubtitle = currentSubtitles.find(sub => 
+                adjustedTime >= sub.startTime && adjustedTime <= sub.endTime
+            );
+            subtitleDiv.style.display = activeSubtitle ? 'block' : 'none';
+            if (activeSubtitle) subtitleDiv.textContent = activeSubtitle.text;
+        } else {
+            subtitleDiv.style.display = 'block';
+        }
+    } else {
+        subtitleDiv.style.display = 'none';
+    }
 }
 
 // ==========================================
 // 7. UI COMPONENTS (Control Bar & Settings)
 // ==========================================
 function createControlBar(video) {
-    if (controlBar) controlBar.remove();
+    if (controlBar) {
+        return;
+    }
     
     controlBar = document.createElement('div');
     controlBar.id = 'vortext-control-bar';
     controlBar.style.cssText = `
-        position: fixed;
-        top: 10px;
-        right: 10px;
-        display: flex;
-        gap: 8px;
-        z-index: 2147483647;
-        background: rgba(0, 0, 0, 0.7);
-        padding: 8px;
-        border-radius: 6px;
-        backdrop-filter: blur(4px);
-        font-family: Arial, sans-serif;
+        position: fixed; top: 10px; right: 10px; display: flex; gap: 8px;
+        z-index: 2147483647; background: rgba(0, 0, 0, 0.7); padding: 8px;
+        border-radius: 6px; backdrop-filter: blur(4px); font-family: Arial, sans-serif;
     `;
 
     const settingsBtn = document.createElement('button');
@@ -521,8 +588,6 @@ function createSettingsPanel() {
             <h2 style="color: #00d9ff; margin: 0; font-size: 20px;">⚙️ Settings</h2>
             <button id="closeSettings" style="background: transparent; border: none; color: white; font-size: 24px; cursor: pointer;">&times;</button>
         </div>
-        
-        <!-- Simplified Sync Offset -->
         <div style="margin-bottom: 20px;">
             <div style="color: #ccc; font-size: 13px; margin-bottom: 8px;">Sync Offset</div>
             <div style="display: flex; gap: 8px; align-items: center; margin-bottom: 10px;">
@@ -532,36 +597,22 @@ function createSettingsPanel() {
                 <button id="syncReset" style="background: transparent; color: #888; border: 1px solid #888; padding: 6px 10px; border-radius: 4px; cursor: pointer; font-size: 14px;">↺</button>
             </div>
         </div>
-        
-        <!-- Text Color -->
         <div style="margin-bottom: 20px;">
             <div style="color: #ccc; font-size: 13px; margin-bottom: 8px;">Text Color</div>
             <input type="color" id="textColorPicker" value="${userSettings.textColor}" style="width: 100%; height: 40px; border: none; cursor: pointer;">
         </div>
-        
-        <!-- Background Color -->
         <div style="margin-bottom: 20px;">
             <div style="color: #ccc; font-size: 13px; margin-bottom: 8px;">Background Color</div>
             <input type="color" id="bgColorPicker" value="${userSettings.bgColorHex}" style="width: 100%; height: 40px; border: none; cursor: pointer;">
         </div>
-        
-        <!-- Opacity Slider -->
         <div style="margin-bottom: 20px;">
             <div style="color: #ccc; font-size: 13px; margin-bottom: 8px;">Background Opacity: <span id="opacityDisplay">${opacity}</span>%</div>
             <input type="range" id="opacitySlider" min="0" max="100" value="${opacity}" style="width: 100%;">
-            <div style="display: flex; justify-content: space-between; font-size: 10px; color: #666; margin-top: 4px;">
-                <span>Transparent</span>
-                <span>Solid</span>
-            </div>
         </div>
-        
-        <!-- Font Size -->
         <div style="margin-bottom: 20px;">
             <div style="color: #ccc; font-size: 13px; margin-bottom: 8px;">Font Size: <span id="fontSizeDisplay">${userSettings.fontSize}</span>px</div>
             <input type="range" id="fontSizeSlider" min="12" max="48" value="${userSettings.fontSize}" style="width: 100%;">
         </div>
-        
-        <!-- Keyboard Shortcuts Info -->
         <div style="margin-top: 30px; padding-top: 20px; border-top: 1px solid #0f3460; color: #888; font-size: 11px; line-height: 1.6;">
             <strong style="color: #00d9ff;">Keyboard Shortcuts:</strong><br>
             [ / ] : ±0.1s | Shift + [ / ] : ±0.5s<br>
@@ -574,25 +625,14 @@ function createSettingsPanel() {
     style.textContent = `
         input[type="range"] { cursor: pointer; }
         input[type="range"]::-webkit-slider-thumb {
-            -webkit-appearance: none;
-            appearance: none;
-            width: 16px;
-            height: 16px;
-            background: #00d9ff;
-            cursor: pointer;
-            border-radius: 50%;
+            -webkit-appearance: none; appearance: none; width: 16px; height: 16px;
+            background: #00d9ff; cursor: pointer; border-radius: 50%;
         }
         input[type="range"]::-moz-range-thumb {
-            width: 16px;
-            height: 16px;
-            background: #00d9ff;
-            cursor: pointer;
-            border-radius: 50%;
-            border: none;
+            width: 16px; height: 16px; background: #00d9ff; cursor: pointer; border-radius: 50%; border: none;
         }
     `;
     settingsPanel.appendChild(style);
-    
     document.body.appendChild(settingsPanel);
     setupSettingsPanelListeners();
 } 
@@ -600,38 +640,29 @@ function createSettingsPanel() {
 function setupSettingsPanelListeners() {
     document.getElementById('closeSettings').onclick = () => toggleSettingsPanel();
     
-    // Simplified Sync Controls
     document.getElementById('syncMinus').onclick = () => {
         userSettings.syncOffset = parseFloat((userSettings.syncOffset - 0.1).toFixed(1));
-        updateSyncDisplay();
-        saveSettings();
-        saveMovieSpecificSettings();
+        updateSyncDisplay(); saveSettings();
         showOSD(`Sync: ${userSettings.syncOffset > 0 ? '+' : ''}${userSettings.syncOffset}s`);
     };
     
     document.getElementById('syncPlus').onclick = () => {
         userSettings.syncOffset = parseFloat((userSettings.syncOffset + 0.1).toFixed(1));
-        updateSyncDisplay();
-        saveSettings();
-        saveMovieSpecificSettings();
+        updateSyncDisplay(); saveSettings();
         showOSD(`Sync: ${userSettings.syncOffset > 0 ? '+' : ''}${userSettings.syncOffset}s`);
     };
     
     document.getElementById('syncReset').onclick = () => {
         userSettings.syncOffset = 0;
-        updateSyncDisplay();
-        saveSettings();
-        saveMovieSpecificSettings();
+        updateSyncDisplay(); saveSettings();
         showOSD('Sync Reset to 0');
     };
     
-    // Text Color
     document.getElementById('textColorPicker').oninput = (e) => {
         userSettings.textColor = e.target.value;
-        saveSettings(); saveMovieSpecificSettings(); applySettings();
+        saveSettings(); applySettings();
     };
     
-    // Background Color
     document.getElementById('bgColorPicker').oninput = (e) => {
         const hex = e.target.value;
         userSettings.bgColorHex = hex;
@@ -640,35 +671,30 @@ function setupSettingsPanelListeners() {
         const b = parseInt(hex.slice(5, 7), 16);
         const opacity = userSettings.bgOpacity !== undefined ? (userSettings.bgOpacity / 100) : 0.8;
         userSettings.bgColor = `rgba(${r}, ${g}, ${b}, ${opacity})`;
-        saveSettings(); saveMovieSpecificSettings(); applySettings();
+        saveSettings(); applySettings();
     };
     
-    // Opacity Slider
     const opacitySlider = document.getElementById('opacitySlider');
     const opacityDisplay = document.getElementById('opacityDisplay');
     
     opacitySlider.oninput = (e) => {
         const opacityPercent = parseInt(e.target.value);
         opacityDisplay.textContent = opacityPercent;
-        
         userSettings.bgOpacity = opacityPercent;
         
         const hex = userSettings.bgColorHex;
         const r = parseInt(hex.slice(1, 3), 16);
         const g = parseInt(hex.slice(3, 5), 16);
         const b = parseInt(hex.slice(5, 7), 16);
-        const opacityDecimal = opacityPercent / 100;
+        userSettings.bgColor = `rgba(${r}, ${g}, ${b}, ${opacityPercent / 100})`;
         
-        userSettings.bgColor = `rgba(${r}, ${g}, ${b}, ${opacityDecimal})`;
-        
-        saveSettings(); saveMovieSpecificSettings(); applySettings();
+        saveSettings(); applySettings();
     };
     
-    // Font Size
     document.getElementById('fontSizeSlider').oninput = (e) => {
         userSettings.fontSize = e.target.value;
         document.getElementById('fontSizeDisplay').textContent = e.target.value;
-        saveSettings(); saveMovieSpecificSettings(); applySettings();
+        saveSettings(); applySettings();
     };
 }
 
@@ -691,7 +717,7 @@ function toggleSettingsPanel() {
 // 8. OSD NOTIFICATIONS
 // ==========================================
 function showOSD(message, duration = 1500) {
-    if (currentSubtitles.length === 0 || !pageHasVideo) {
+    if (currentSubtitles.length === 0 && !message.includes('Error')) {
         return; 
     }
     
@@ -723,10 +749,7 @@ function showOSD(message, duration = 1500) {
     document.body.appendChild(osdElement);
     
     setTimeout(() => { 
-        if (osdElement) { 
-            osdElement.remove(); 
-            osdElement = null; 
-        } 
+        if (osdElement) { osdElement.remove(); osdElement = null; } 
     }, duration);
 }
 
@@ -756,7 +779,7 @@ document.addEventListener('keydown', function (e) {
     if (offsetChange !== 0) {
         e.preventDefault();
         userSettings.syncOffset = parseFloat((userSettings.syncOffset + offsetChange).toFixed(1));
-        saveSettings(); saveMovieSpecificSettings();
+        saveSettings();
         showMessage = `Sync: ${userSettings.syncOffset > 0 ? '+' : ''}${userSettings.syncOffset}s`;
     } else if (key === 's') {
         e.preventDefault();
@@ -769,21 +792,21 @@ document.addEventListener('keydown', function (e) {
         let newSize = parseInt(userSettings.fontSize) + 2;
         if (newSize > 48) newSize = 48;
         userSettings.fontSize = newSize.toString();
-        saveSettings(); saveMovieSpecificSettings();
+        saveSettings();
         showMessage = `Font: ${newSize}px`;
     } else if (key === '-' || key === '_') {
         e.preventDefault();
         let newSize = parseInt(userSettings.fontSize) - 2;
         if (newSize < 12) newSize = 12;
         userSettings.fontSize = newSize.toString();
-        saveSettings(); saveMovieSpecificSettings();
+        saveSettings();
         showMessage = `Font: ${newSize}px`;
     } else if (key === 'c') {
         e.preventDefault();
         const colors = ['#ffffff', '#ffff00', '#00ffff', '#ff00ff', '#00ff00'];
         let currentIdx = colors.indexOf(userSettings.textColor);
         userSettings.textColor = colors[(currentIdx + 1) % colors.length];
-        saveSettings(); saveMovieSpecificSettings();
+        saveSettings();
         showMessage = 'Color Changed';
     } else if (key === 'd') {
         e.preventDefault();
@@ -791,7 +814,7 @@ document.addEventListener('keydown', function (e) {
     } else if (key === 'r') {
         e.preventDefault();
         userSettings.syncOffset = 0;
-        saveSettings(); saveMovieSpecificSettings();
+        saveSettings();
         showMessage = 'Sync Reset';
     }
     
@@ -823,10 +846,92 @@ new MutationObserver(() => {
     const url = location.href;
     if (url !== lastUrl) {
         lastUrl = url;
-        cleanupIfNoVideo(); // Clean up old page
+        cleanupIfNoVideo(); 
         if (currentSubtitles.length > 0) {
-            isPageInitialized = false; // Force re-evaluation for new URL
+            isPageInitialized = false; 
             setupVideoObserver();
         }
     }
 }).observe(document, { subtree: true, childList: true });
+
+// ==========================================
+// 11. MESSAGE LISTENER (For Popup Communication)
+// ==========================================
+chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+    if (request.action === 'checkVideo') {
+        const allVideos = document.querySelectorAll('video');
+        let videoFound = false;
+        for (let video of allVideos) {
+            const rect = video.getBoundingClientRect();
+            if (rect.width > 50 && rect.height > 50) {
+                const style = window.getComputedStyle(video);
+                if (style.display !== 'none' && style.visibility !== 'hidden') {
+                    videoFound = true;
+                    break;
+                }
+            }
+        }
+        sendResponse({ videoFound: videoFound });
+    }
+    
+    if (request.action === 'adjustPosition') {
+        if (!subtitleDiv || !videoElement) {
+            sendResponse({ success: false, error: 'No subtitle or video' });
+            return true;
+        }
+        
+        if (request.direction === 'reset') {
+            subtitleDiv.dataset.manuallyPositioned = 'false';
+            chrome.storage.local.remove('subtitlePosition');
+            updateOverlayPosition();
+            showOSD('Position Reset');
+            sendResponse({ success: true });
+            return true;
+        }
+        
+        if (subtitleDiv.dataset.manuallyPositioned !== 'true') {
+            subtitleDiv.dataset.manuallyPositioned = 'true';
+            const rect = videoElement.getBoundingClientRect();
+            const subWidth = subtitleDiv.offsetWidth || 0;
+            const currentLeftPx = parseFloat(subtitleDiv.style.left) || (rect.left + rect.width / 2);
+            const currentBottomPx = parseFloat(subtitleDiv.style.bottom) || Math.max(60, window.innerHeight - rect.bottom);
+            
+            const relX = ((currentLeftPx - (subWidth / 2) - rect.left) / rect.width) * 100;
+            const distFromVideoBottom = currentBottomPx - (window.innerHeight - rect.bottom);
+            const relY = (distFromVideoBottom / rect.height) * 100;
+            
+            chrome.storage.local.set({
+                subtitlePosition: { x: relX, y: relY, movieName: currentMovieName }
+            });
+        }
+        
+        chrome.storage.local.get('subtitlePosition', function(data) {
+            if (!data.subtitlePosition) {
+                sendResponse({ success: false, error: 'No position data' });
+                return;
+            }
+            
+            let newY = data.subtitlePosition.y;
+            if (request.direction === 'up') newY -= 5; 
+            if (request.direction === 'down') newY += 5; 
+            
+            data.subtitlePosition.y = newY;
+            chrome.storage.local.set({ subtitlePosition: data.subtitlePosition });
+            
+            const rect = videoElement.getBoundingClientRect();
+            const subWidth = subtitleDiv.offsetWidth || 0;
+            const targetLeft = rect.left + (rect.width * (data.subtitlePosition.x / 100)) + (subWidth / 2);
+            const distFromVideoBottom = rect.height * (data.subtitlePosition.y / 100);
+            const targetBottom = window.innerHeight - rect.bottom + distFromVideoBottom;
+            
+            subtitleDiv.style.left = `${targetLeft}px`;
+            subtitleDiv.style.bottom = `${targetBottom}px`;
+            
+            showOSD(`Position Adjusted`);
+            sendResponse({ success: true });
+        });
+        return true;
+    }
+    
+    return true;
+});
