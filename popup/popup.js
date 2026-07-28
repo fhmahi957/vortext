@@ -29,6 +29,29 @@ document.addEventListener('DOMContentLoaded', function () {
         isOverlayVisible: true
     };
 
+
+        // ==========================================
+    // POSITION CONTROLS
+    // ==========================================
+    document.getElementById('posUp').addEventListener('click', () => {
+        chrome.tabs.query({ active: true, currentWindow: true }, function(tabs) {
+            chrome.tabs.sendMessage(tabs[0].id, { action: 'adjustPosition', direction: 'up' });
+        });
+    });
+
+    document.getElementById('posDown').addEventListener('click', () => {
+        chrome.tabs.query({ active: true, currentWindow: true }, function(tabs) {
+            chrome.tabs.sendMessage(tabs[0].id, { action: 'adjustPosition', direction: 'down' });
+        });
+    });
+
+    document.getElementById('posReset').addEventListener('click', () => {
+        chrome.tabs.query({ active: true, currentWindow: true }, function(tabs) {
+            chrome.tabs.sendMessage(tabs[0].id, { action: 'adjustPosition', direction: 'reset' });
+        });
+    });
+
+    
     // Check video detection status
     chrome.tabs.query({ active: true, currentWindow: true }, function(tabs) {
         chrome.tabs.sendMessage(tabs[0].id, { action: 'checkVideo' }, function(response) {
@@ -224,8 +247,10 @@ if (opacitySlider && opacityVal) {
         if (e.key === 'Enter') performSearch();
     });
 
-    async function performSearch() {
+        async function performSearch() {
         const query = searchInput.value.trim();
+        const lang = document.getElementById('languageSelect').value; // NEW: Get selected language
+        
         if (!query) {
             resultsDiv.innerHTML = '<p style="color: #888; text-align: center;">Please enter a movie or show name</p>';
             return;
@@ -234,7 +259,10 @@ if (opacitySlider && opacityVal) {
         resultsDiv.innerHTML = '<p style="color: #00d9ff; text-align: center;">Searching...</p>';
 
         try {
-            const url = `https://api.opensubtitles.com/api/v1/subtitles?query=${encodeURIComponent(query)}&languages=en`;
+            // NEW: Conditionally add language parameter
+            const langParam = lang === 'all' ? '' : `&languages=${lang}`;
+            const url = `https://api.opensubtitles.com/api/v1/subtitles?query=${encodeURIComponent(query)}${langParam}`;
+            
             const response = await fetch(url, {
                 method: 'GET',
                 headers: { 
@@ -243,6 +271,7 @@ if (opacitySlider && opacityVal) {
                     'Accept': 'application/json' 
                 }
             });
+            
 
             if (!response.ok) throw new Error(`Server error: ${response.status}`);
             const data = await response.json();
