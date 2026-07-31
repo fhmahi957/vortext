@@ -7,8 +7,6 @@ document.addEventListener('DOMContentLoaded', function () {
     const videoStatusIndicator = document.getElementById('videoStatusIndicator');
     const dropZone = document.getElementById('dropZone');
 
-    const API_KEY = OPENSUBTITLES_API_KEY;
-
     // Control Panel Elements
     const toggleBtn = document.getElementById('toggleBtn');
     const syncMinus = document.getElementById('syncMinus');
@@ -29,8 +27,7 @@ document.addEventListener('DOMContentLoaded', function () {
         isOverlayVisible: true
     };
 
-
-        // ==========================================
+    // ==========================================
     // POSITION CONTROLS
     // ==========================================
     document.getElementById('posUp').addEventListener('click', () => {
@@ -51,7 +48,6 @@ document.addEventListener('DOMContentLoaded', function () {
         });
     });
 
-    
     // Check video detection status
     chrome.tabs.query({ active: true, currentWindow: true }, function(tabs) {
         chrome.tabs.sendMessage(tabs[0].id, { action: 'checkVideo' }, function(response) {
@@ -74,7 +70,6 @@ document.addEventListener('DOMContentLoaded', function () {
             statusText.textContent = `Active: ${data.currentSubtitle.movieName}`;
             controlPanel.style.display = 'block';
             
-            // Load movie-specific sync if available
             if (data.movieSyncMemory && data.movieSyncMemory[data.currentSubtitle.movieName]) {
                 const saved = data.movieSyncMemory[data.currentSubtitle.movieName];
                 currentSettings.syncOffset = saved.syncOffset || 0;
@@ -86,7 +81,6 @@ document.addEventListener('DOMContentLoaded', function () {
         }
     });
 
-    // Listen for storage changes
     chrome.storage.onChanged.addListener(function (changes, namespace) {
         if (namespace === 'local' && changes.currentSubtitle) {
             if (changes.currentSubtitle.newValue) {
@@ -162,37 +156,30 @@ document.addEventListener('DOMContentLoaded', function () {
         saveSettings();
     });
 
-    // Opacity Slider
-const opacitySlider = document.getElementById('opacitySlider');
-const opacityVal = document.getElementById('opacityVal');
+    const opacitySlider = document.getElementById('opacitySlider');
+    const opacityVal = document.getElementById('opacityVal');
 
-if (opacitySlider && opacityVal) {
-    // Load saved opacity
-    chrome.storage.local.get('vortextSettings', function(data) {
-        if (data.vortextSettings && data.vortextSettings.bgOpacity !== undefined) {
-            opacitySlider.value = data.vortextSettings.bgOpacity;
-            opacityVal.textContent = data.vortextSettings.bgOpacity;
-        }
-    });
-    
-    opacitySlider.addEventListener('input', (e) => {
-        const opacity = parseInt(e.target.value);
-        opacityVal.textContent = opacity;
+    if (opacitySlider && opacityVal) {
+        chrome.storage.local.get('vortextSettings', function(data) {
+            if (data.vortextSettings && data.vortextSettings.bgOpacity !== undefined) {
+                opacitySlider.value = data.vortextSettings.bgOpacity;
+                opacityVal.textContent = data.vortextSettings.bgOpacity;
+            }
+        });
         
-        // Convert to decimal (0 to 1)
-        const opacityDecimal = opacity / 100;
-        
-        // Update background color with new opacity
-        const hex = currentSettings.bgColorHex;
-        const r = parseInt(hex.slice(1, 3), 16);
-        const g = parseInt(hex.slice(3, 5), 16);
-        const b = parseInt(hex.slice(5, 7), 16);
-        currentSettings.bgColor = `rgba(${r}, ${g}, ${b}, ${opacityDecimal})`;
-        currentSettings.bgOpacity = opacity;
-        
-        saveSettings();
-    });
-}
+        opacitySlider.addEventListener('input', (e) => {
+            const opacity = parseInt(e.target.value);
+            opacityVal.textContent = opacity;
+            const opacityDecimal = opacity / 100;
+            const hex = currentSettings.bgColorHex;
+            const r = parseInt(hex.slice(1, 3), 16);
+            const g = parseInt(hex.slice(3, 5), 16);
+            const b = parseInt(hex.slice(5, 7), 16);
+            currentSettings.bgColor = `rgba(${r}, ${g}, ${b}, ${opacityDecimal})`;
+            currentSettings.bgOpacity = opacity;
+            saveSettings();
+        });
+    }
 
     // Drag & Drop for .srt files
     dropZone.addEventListener('dragover', (e) => {
@@ -219,7 +206,7 @@ if (opacitySlider && opacityVal) {
                 const reader = new FileReader();
                 reader.onload = function(event) {
                     const content = event.target.result;
-                    const movieName = file.name.replace('.srt', '').replace(/\.[0-9]{4}$/, ''); // Remove year if present
+                    const movieName = file.name.replace('.srt', '').replace(/\.[0-9]{4}$/, '');
                     
                     chrome.storage.local.set({
                         currentSubtitle: {
@@ -247,9 +234,10 @@ if (opacitySlider && opacityVal) {
         if (e.key === 'Enter') performSearch();
     });
 
-        async function performSearch() {
+    // UPDATED: Sends message to background.js instead of fetching directly
+    function performSearch() {
         const query = searchInput.value.trim();
-        const lang = document.getElementById('languageSelect').value; // NEW: Get selected language
+        const lang = document.getElementById('languageSelect').value;
         
         if (!query) {
             resultsDiv.innerHTML = '<p style="color: #888; text-align: center;">Please enter a movie or show name</p>';
@@ -258,32 +246,19 @@ if (opacitySlider && opacityVal) {
 
         resultsDiv.innerHTML = '<p style="color: #00d9ff; text-align: center;">Searching...</p>';
 
-        try {
-            // NEW: Conditionally add language parameter
-            const langParam = lang === 'all' ? '' : `&languages=${lang}`;
-            const url = `https://api.opensubtitles.com/api/v1/subtitles?query=${encodeURIComponent(query)}${langParam}`;
-            
-            const response = await fetch(url, {
-                method: 'GET',
-                headers: { 
-                    'Api-Key': API_KEY, 
-                    'Content-Type': 'application/json', 
-                    'Accept': 'application/json' 
-                }
-            });
-            
-
-            if (!response.ok) throw new Error(`Server error: ${response.status}`);
-            const data = await response.json();
-
-            if (!data.data || data.data.length === 0) {
-                resultsDiv.innerHTML = '<p style="color: #888; text-align: center;">No results found</p>';
+        chrome.runtime.sendMessage({ action: 'searchSubtitles', query: query, lang: lang }, function(response) {
+            if (chrome.runtime.lastError) {
+                resultsDiv.innerHTML = `<p style="color: red; text-align: center;">Extension error: ${chrome.runtime.lastError.message}</p>`;
                 return;
             }
-            displayResults(data.data);
-        } catch (error) {
-            resultsDiv.innerHTML = `<p style="color: red; text-align: center;">${error.message}</p>`;
-        }
+            
+            if (response && response.success) {
+                displayResults(response.data);
+            } else {
+                const errorMsg = response ? response.error : 'Unknown error';
+                resultsDiv.innerHTML = `<p style="color: red; text-align: center;">${errorMsg}</p>`;
+            }
+        });
     }
 
     function displayResults(subtitles) {
@@ -294,6 +269,7 @@ if (opacitySlider && opacityVal) {
             const language = sub.attributes.language;
             const subtitleId = sub.id;
             const files = sub.attributes.files;
+            const fileId = files && files.length > 0 ? files[0].file_id : null;
 
             const item = document.createElement('div');
             item.className = 'result-item';
@@ -302,39 +278,37 @@ if (opacitySlider && opacityVal) {
                 <p>Year: ${year} | Lang: ${language.toUpperCase()}</p>
                 <p style="color: #00ff88; margin-top: 5px; font-size: 11px;">Click to download</p>
             `;
-            item.addEventListener('click', () => downloadSubtitle(subtitleId, movieName, files));
+            item.addEventListener('click', () => {
+                if (fileId) {
+                    downloadSubtitle(subtitleId, movieName, fileId);
+                } else {
+                    resultsDiv.innerHTML = '<p style="color: red; text-align: center;">No file available for this subtitle.</p>';
+                }
+            });
             resultsDiv.appendChild(item);
         });
     }
 
-    async function downloadSubtitle(subtitleId, movieName, files) {
+    // UPDATED: Sends message to background.js instead of fetching directly
+    function downloadSubtitle(subtitleId, movieName, fileId) {
         resultsDiv.innerHTML = '<p style="color: #00d9ff; text-align: center;">Downloading...</p>';
-        try {
-            let downloadUrl = null;
-            if (files && files.length > 0) {
-                const fileId = files[0].file_id;
-                const downloadResponse = await fetch('https://api.opensubtitles.com/api/v1/download', {
-                    method: 'POST',
-                    headers: { 
-                        'Api-Key': API_KEY, 
-                        'Content-Type': 'application/json', 
-                        'Accept': 'application/json' 
-                    },
-                    body: JSON.stringify({ subtitle_id: subtitleId, file_id: fileId })
-                });
-                if (downloadResponse.ok) {
-                    const downloadData = await downloadResponse.json();
-                    downloadUrl = downloadData.link;
-                }
+
+        chrome.runtime.sendMessage({ 
+            action: 'downloadSubtitle', 
+            subtitleId: subtitleId, 
+            fileId: fileId, 
+            movieName: movieName 
+        }, function(response) {
+            if (chrome.runtime.lastError) {
+                resultsDiv.innerHTML = `<p style="color: red; text-align: center;">Extension error: ${chrome.runtime.lastError.message}</p>`;
+                return;
             }
 
-            if (downloadUrl) {
-                const srtResponse = await fetch(downloadUrl);
-                const srtContent = await srtResponse.text();
+            if (response && response.success) {
                 chrome.storage.local.set({
                     currentSubtitle: { 
                         movieName: movieName, 
-                        content: srtContent, 
+                        content: response.content, 
                         timestamp: Date.now(),
                         isLocal: false
                     }
@@ -343,9 +317,10 @@ if (opacitySlider && opacityVal) {
                     statusText.textContent = `Active: ${movieName}`;
                     controlPanel.style.display = 'block';
                 });
+            } else {
+                const errorMsg = response ? response.error : 'Unknown error';
+                resultsDiv.innerHTML = `<p style="color: red; text-align: center;">Error: ${errorMsg}</p>`;
             }
-        } catch (error) {
-            resultsDiv.innerHTML = '<p style="color: red; text-align: center;">Error downloading</p>';
-        }
+        });
     }
 });

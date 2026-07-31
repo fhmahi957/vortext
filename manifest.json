@@ -15,22 +15,17 @@
     "host_permissions": [
         "https://api.opensubtitles.com/*",
         "https://dl.opensubtitles.com/*",
-        "*://*.youtube.com/*",
-        "*://*.dailymotion.com/*",
-        "*://*.netflix.com/*",
-        "*://*.primevideo.com/*",
         "<all_urls>"
     ],
+    "background": {
+        "service_worker": "background.js"
+    },
     "content_scripts": [
         {
-            "matches": [
-                "<all_urls>"
-            ],
-            "js": [
-                "content/content.js"
-            ],
+            "matches": ["<all_urls>"],
+            "js": ["content/content.js"],
             "run_at": "document_idle",
             "all_frames": false
         }
     ]
-}   
+}
