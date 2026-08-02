@@ -286,9 +286,9 @@ function attemptSetup() {
             if (retryTimer) clearTimeout(retryTimer);
             retryTimer = setTimeout(attemptSetup, RETRY_DELAY_MS);
         } else {
-            // Max retries reached: clean up and show error
+            // Max retries reached: clean up silently (NO annoying error message)
             cleanupUI();
-            showOSD('No video element found on this page');
+            // showOSD('No video element found on this page'); // REMOVED
         }
     }
 }

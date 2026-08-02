@@ -2,8 +2,8 @@
 // VORTEXT - Background Service Worker
 // ==========================================
 
-// SECURE API KEY
-   const API_KEY = 'YOUR_API_KEY_HERE'; 
+
+const API_KEY = 'nothing_up_here'; 
 
 console.log('[Vortext Background] API Key loaded:', API_KEY ? 'YES' : 'NO');
 
@@ -57,7 +57,7 @@ async function performSearch(query, lang) {
     const response = await fetch(url, {
         method: 'GET',
         headers: { 
-            'Api-Key': API_KEY,
+            'Api-Key': API_KEY,  // ✅ Now matches the variable name
             'Content-Type': 'application/json',
             'Accept': 'application/json'
         }
@@ -80,11 +80,10 @@ async function downloadSubtitle(subtitleId, fileId, movieName) {
     
     if (!API_KEY) throw new Error('API_KEY is not defined');
     
-    // Step 1: Get the download link
     const downloadResponse = await fetch('https://api.opensubtitles.com/api/v1/download', {
         method: 'POST',
         headers: { 
-            'Api-Key': API_KEY,
+            'Api-Key': API_KEY,  // ✅ Now matches
             'Content-Type': 'application/json',
             'Accept': 'application/json'
         },
@@ -100,7 +99,6 @@ async function downloadSubtitle(subtitleId, fileId, movieName) {
         throw new Error('No download link received');
     }
 
-    // Step 2: Fetch the actual .srt content
     const srtResponse = await fetch(downloadData.link);
     if (!srtResponse.ok) {
         throw new Error('Failed to download subtitle file');
