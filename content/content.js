@@ -428,56 +428,90 @@ function createSubtitleOverlay(video) {
     `;
 
     applySettings();
+    // Restore saved position if exists
+    chrome.storage.local.get('subtitlePosition', function(data) {
+    if (data.subtitlePosition && 
+        data.subtitlePosition.movieName === currentMovieName &&
+        data.subtitlePosition.isAbsolute) {
+        
+        const videoRect = videoElement.getBoundingClientRect();
+        const absoluteX = videoRect.left + (videoRect.width * (data.subtitlePosition.x / 100));
+        const absoluteY = videoRect.top + (videoRect.height * (data.subtitlePosition.y / 100));
+        
+        subtitleDiv.style.left = `${absoluteX}px`;
+        subtitleDiv.style.top = `${absoluteY}px`;
+        subtitleDiv.style.bottom = 'auto';
+        subtitleDiv.style.transform = 'none';
+        subtitleDiv.dataset.manuallyPositioned = 'true';
+    }
+});
     document.body.appendChild(subtitleDiv);
     updateOverlayPosition();
 
     // Dragging logic
-    let isDragging = false;
-    let startX, startY, initialLeft, initialBottom;
+let isDragging = false;
+let startX, startY, initialLeft, initialTop;
 
-    subtitleDiv.addEventListener('mousedown', (e) => {
-        isDragging = true;
-        subtitleDiv.dataset.isDragging = 'true';
-        startX = e.clientX;
-        startY = e.clientY;
-        const rect = subtitleDiv.getBoundingClientRect();
-        initialLeft = rect.left;
-        initialBottom = window.innerHeight - rect.bottom;
-        subtitleDiv.style.transition = 'none';
-        subtitleDiv.style.cursor = 'grabbing';
-        e.preventDefault();
-    });
+subtitleDiv.addEventListener('mousedown', (e) => {
+    isDragging = true;
+    subtitleDiv.dataset.isDragging = 'true';
+    startX = e.clientX;
+    startY = e.clientY;
+    
+    // Get current computed position
+    const rect = subtitleDiv.getBoundingClientRect();
+    initialLeft = rect.left;
+    initialTop = rect.top;
+    
+    subtitleDiv.style.transition = 'none';
+    subtitleDiv.style.cursor = 'grabbing';
+    subtitleDiv.dataset.manuallyPositioned = 'true';
+    e.preventDefault();
+});
 
-    document.addEventListener('mousemove', (e) => {
-        if (!isDragging) return;
-        const deltaX = e.clientX - startX;
-        const deltaY = e.clientY - startY;
-        const newLeft = initialLeft + deltaX;
-        const newBottom = initialBottom - deltaY;
+document.addEventListener('mousemove', (e) => {
+    if (!isDragging) return;
+    
+    const deltaX = e.clientX - startX;
+    const deltaY = e.clientY - startY;
+    const newLeft = initialLeft + deltaX;
+    const newTop = initialTop + deltaY;
+    
+    // Keep subtitle within viewport bounds
+    const maxX = window.innerWidth - subtitleDiv.offsetWidth;
+    const maxY = window.innerHeight - subtitleDiv.offsetHeight;
+    
+    subtitleDiv.style.left = `${Math.max(0, Math.min(newLeft, maxX))}px`;
+    subtitleDiv.style.top = `${Math.max(0, Math.min(newTop, maxY))}px`;
+    subtitleDiv.style.transform = 'none'; // Remove centering transform
+    subtitleDiv.style.bottom = 'auto'; // Clear bottom positioning
+});
 
-        subtitleDiv.style.left = `${newLeft + (subtitleDiv.offsetWidth / 2)}px`;
-        subtitleDiv.style.transform = 'translateX(-50%)';
-        subtitleDiv.style.bottom = `${newBottom}px`;
-        subtitleDiv.dataset.manuallyPositioned = 'true';
-    });
-
-    document.addEventListener('mouseup', () => {
-        if (isDragging) {
-            isDragging = false;
-            subtitleDiv.dataset.isDragging = 'false';
-            subtitleDiv.style.cursor = 'move';
-
+document.addEventListener('mouseup', () => {
+    if (isDragging) {
+        isDragging = false;
+        subtitleDiv.dataset.isDragging = 'false';
+        subtitleDiv.style.cursor = 'move';
+        
+        // Save position relative to video
+        if (videoElement) {
             const rect = subtitleDiv.getBoundingClientRect();
             const videoRect = videoElement.getBoundingClientRect();
+            
+            const relativeX = ((rect.left - videoRect.left) / videoRect.width) * 200;
+            const relativeY = ((rect.top - videoRect.top) / videoRect.height) * 200;
+            
             chrome.storage.local.set({
                 subtitlePosition: {
-                    x: ((rect.left - videoRect.left) / videoRect.width) * 100,
-                    y: ((window.innerHeight - rect.bottom) / videoRect.height) * 100,
-                    movieName: currentMovieName
+                    x: relativeX,
+                    y: relativeY,
+                    movieName: currentMovieName,
+                    isAbsolute: true // Mark as absolute positioning
                 }
             });
         }
-    });
+    }
+});
 
     // Attach timeupdate listeners
     video.addEventListener('timeupdate', updateOverlayPosition);
@@ -485,26 +519,34 @@ function createSubtitleOverlay(video) {
 
     // Fullscreen handling
     function handleFullscreenChange() {
-        if (!subtitleDiv) return;
-        const fullscreenElement = document.fullscreenElement ||
-                                  document.webkitFullscreenElement ||
-                                  document.mozFullScreenElement ||
-                                  document.msFullscreenElement;
+    if (!subtitleDiv) return;
+    const fullscreenElement = document.fullscreenElement ||
+                              document.webkitFullscreenElement ||
+                              document.mozFullScreenElement ||
+                              document.msFullscreenElement;
 
-        if (fullscreenElement) {
-            fullscreenElement.appendChild(subtitleDiv);
-            subtitleDiv.style.position = 'absolute';
-            subtitleDiv.style.bottom = '60px';
-            subtitleDiv.style.left = '50%';
-            subtitleDiv.style.transform = 'translateX(-50%)';
-            subtitleDiv.style.maxWidth = '90%';
-            subtitleDiv.style.width = 'auto';
+    if (fullscreenElement) {
+        fullscreenElement.appendChild(subtitleDiv);
+        subtitleDiv.style.position = 'absolute';
+        subtitleDiv.style.bottom = '60px';
+        subtitleDiv.style.left = '50%';
+        subtitleDiv.style.transform = 'translateX(-50%)';
+        subtitleDiv.style.top = 'auto';
+        subtitleDiv.style.maxWidth = '90%';
+        subtitleDiv.style.width = 'auto';
+        // Reset manual positioning in fullscreen
+        subtitleDiv.dataset.manuallyPositioned = 'false';
+    } else {
+        document.body.appendChild(subtitleDiv);
+        subtitleDiv.style.position = 'fixed';
+        // Restore manual positioning if it was set
+        if (subtitleDiv.dataset.manuallyPositioned === 'true') {
+            // Position will be restored by updateOverlayPosition
         } else {
-            document.body.appendChild(subtitleDiv);
-            subtitleDiv.style.position = 'fixed';
             setTimeout(updateOverlayPosition, 100);
         }
     }
+}
 
     document.addEventListener('fullscreenchange', handleFullscreenChange);
     document.addEventListener('webkitfullscreenchange', handleFullscreenChange);
@@ -530,6 +572,9 @@ function onVideoTimeUpdate() {
     }
 }
 
+//========================================== PREVIOUS updateOverlayPosition
+
+/*
 function updateOverlayPosition() {
     if (!videoElement || !subtitleDiv) return;
     if (subtitleDiv.dataset.isDragging === 'true') return;
@@ -557,6 +602,32 @@ function updateOverlayPosition() {
     }
 }
 
+*/
+
+function updateOverlayPosition() {
+    if (!videoElement || !subtitleDiv) return;
+    
+    // NEVER update position if user manually positioned it
+    if (subtitleDiv.dataset.manuallyPositioned === 'true') {
+        return;
+    }
+    
+    const rect = videoElement.getBoundingClientRect();
+    const viewportHeight = window.innerHeight;
+    const fullscreenElement = document.fullscreenElement || document.webkitFullscreenElement;
+    
+    if (fullscreenElement) return;
+    
+    // Default positioning (centered at bottom)
+    const bottomOffset = Math.max(60, viewportHeight - rect.bottom);
+    subtitleDiv.style.bottom = `${bottomOffset}px`;
+    subtitleDiv.style.left = `${rect.left + (rect.width / 2)}px`;
+    subtitleDiv.style.transform = 'translateX(-50%)';
+    subtitleDiv.style.top = 'auto';
+}
+
+
+
 function applySettings() {
     if (!subtitleDiv) return;
     subtitleDiv.style.color = userSettings.textColor;
@@ -582,6 +653,7 @@ function applySettings() {
 // ==========================================
 // 8. UI COMPONENTS (Control Bar & Settings)
 // ==========================================
+/*
 function createControlBar(video) {
     if (controlBar) return;
 
@@ -624,6 +696,139 @@ function createControlBar(video) {
     controlBar.appendChild(settingsBtn);
     controlBar.appendChild(toggleBtn);
     document.body.appendChild(controlBar);
+}
+ 
+*/
+
+
+function createControlBar(video) {
+    if (controlBar) return;
+
+    controlBar = document.createElement('div');
+    controlBar.id = 'vortext-control-bar';
+    controlBar.style.cssText = `
+        position: fixed; 
+        top: 10px; 
+        right: 10px; 
+        display: flex; 
+        gap: 8px;
+        z-index: 2147483647; 
+        background: rgba(0, 0, 0, 0.7); 
+        padding: 8px;
+        border-radius: 6px; 
+        backdrop-filter: blur(4px); 
+        font-family: Arial, sans-serif;
+        cursor: move;
+        user-select: none;
+    `;
+
+    // Restore saved position
+    chrome.storage.local.get('controlBarPosition', function(data) {
+        if (data.controlBarPosition) {
+            controlBar.style.left = `${data.controlBarPosition.x}px`;
+            controlBar.style.top = `${data.controlBarPosition.y}px`;
+            controlBar.style.right = 'auto'; // Clear the default right positioning
+        }
+    });
+
+    const settingsBtn = document.createElement('button');
+    settingsBtn.innerHTML = '️';
+    settingsBtn.style.cssText = `
+        background: transparent; border: none; color: white; font-size: 20px;
+        cursor: pointer; padding: 4px 8px; border-radius: 4px; transition: all 0.2s;
+    `;
+    settingsBtn.onmouseenter = () => settingsBtn.style.background = 'rgba(255,255,255,0.1)';
+    settingsBtn.onmouseleave = () => settingsBtn.style.background = 'transparent';
+    settingsBtn.onclick = () => toggleSettingsPanel();
+    
+    // Prevent drag when clicking settings button
+    settingsBtn.addEventListener('mousedown', (e) => e.stopPropagation());
+
+    const toggleBtn = document.createElement('button');
+    toggleBtn.textContent = userSettings.isOverlayVisible ? 'ON' : 'OFF';
+    toggleBtn.style.cssText = `
+        background: ${userSettings.isOverlayVisible ? '#00d9ff' : '#555'};
+        border: none; color: ${userSettings.isOverlayVisible ? '#1a1a2e' : '#aaa'};
+        font-weight: bold; font-size: 12px; cursor: pointer; padding: 6px 12px;
+        border-radius: 4px; min-width: 50px; transition: all 0.2s;
+    `;
+    toggleBtn.onclick = () => {
+        userSettings.isOverlayVisible = !userSettings.isOverlayVisible;
+        toggleBtn.textContent = userSettings.isOverlayVisible ? 'ON' : 'OFF';
+        toggleBtn.style.background = userSettings.isOverlayVisible ? '#00d9ff' : '#555';
+        toggleBtn.style.color = userSettings.isOverlayVisible ? '#1a1a2e' : '#aaa';
+        saveSettings();
+        if (subtitleDiv) subtitleDiv.style.display = userSettings.isOverlayVisible ? 'block' : 'none';
+        showOSD(userSettings.isOverlayVisible ? 'Subtitles ON' : 'Subtitles OFF');
+    };
+    
+    // Prevent drag when clicking toggle button
+    toggleBtn.addEventListener('mousedown', (e) => e.stopPropagation());
+
+    controlBar.appendChild(settingsBtn);
+    controlBar.appendChild(toggleBtn);
+    document.body.appendChild(controlBar);
+
+    // ===== DRAG FUNCTIONALITY =====
+    let isDragging = false;
+    let startX, startY, initialLeft, initialTop;
+
+    controlBar.addEventListener('mousedown', (e) => {
+        isDragging = true;
+        startX = e.clientX;
+        startY = e.clientY;
+        
+        const rect = controlBar.getBoundingClientRect();
+        initialLeft = rect.left;
+        initialTop = rect.top;
+        
+        controlBar.style.cursor = 'grabbing';
+        e.preventDefault();
+    });
+
+    document.addEventListener('mousemove', (e) => {
+        if (!isDragging) return;
+        
+        const deltaX = e.clientX - startX;
+        const deltaY = e.clientY - startY;
+        const newLeft = initialLeft + deltaX;
+        const newTop = initialTop + deltaY;
+        
+        // Keep within viewport bounds
+        const maxX = window.innerWidth - controlBar.offsetWidth;
+        const maxY = window.innerHeight - controlBar.offsetHeight;
+        
+        controlBar.style.left = `${Math.max(0, Math.min(newLeft, maxX))}px`;
+        controlBar.style.top = `${Math.max(0, Math.min(newTop, maxY))}px`;
+        controlBar.style.right = 'auto';
+    });
+
+    document.addEventListener('mouseup', () => {
+        if (isDragging) {
+            isDragging = false;
+            controlBar.style.cursor = 'move';
+            
+            // Save position
+            const rect = controlBar.getBoundingClientRect();
+            chrome.storage.local.set({
+                controlBarPosition: {
+                    x: rect.left,
+                    y: rect.top
+                }
+            });
+        }
+    });
+}
+
+// Optional: Add a function to reset control bar position
+
+function resetControlBarPosition() {
+    if (controlBar) {
+        controlBar.style.left = 'auto';
+        controlBar.style.top = '10px';
+        controlBar.style.right = '10px';
+        chrome.storage.local.remove('controlBarPosition');
+    }
 }
 
 function createSettingsPanel() {
