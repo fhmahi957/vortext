@@ -1,5 +1,5 @@
 // ==========================================
-// VORTEXT - Advanced Subtitle Overlay (Fixed)
+// VORTEXT - Advanced Subtitle Overlay (Final Fixed Version)
 // ==========================================
 
 // 1. GLOBAL STATE
@@ -14,8 +14,8 @@ let isPageInitialized = false;
 
 let retryTimer = null;
 let retryCount = 0;
-const MAX_RETRIES = 10;        // increased from 5 to give more time
-const RETRY_DELAY_MS = 1000;   // 1 second between attempts
+const MAX_RETRIES = 10;
+const RETRY_DELAY_MS = 1000;
 
 let mutationObserver = null;
 let urlObserver = null;
@@ -70,8 +70,7 @@ chrome.storage.onChanged.addListener(function (changes, namespace) {
             if (changes.currentSubtitle.newValue) {
                 currentMovieName = changes.currentSubtitle.newValue.movieName;
                 loadMovieSpecificSettings();
-                // Clean old UI, then load new subtitle
-                cleanupUI();
+                cleanupSubtitle();
                 currentSubtitles = [];
                 initializeSubtitleOverlay(changes.currentSubtitle.newValue);
             } else {
@@ -125,7 +124,25 @@ function cleanupUI() {
     if (settingsPanel) { settingsPanel.remove(); settingsPanel = null; }
     if (osdElement) { osdElement.remove(); osdElement = null; }
 
-    // Remove listeners from old video
+    if (videoElement) {
+        videoElement.removeEventListener('timeupdate', updateOverlayPosition);
+        videoElement.removeEventListener('timeupdate', onVideoTimeUpdate);
+        videoElement.dataset.vortextSetup = 'false';
+        videoElement = null;
+    }
+
+    isPageInitialized = false;
+    if (retryTimer) {
+        clearTimeout(retryTimer);
+        retryTimer = null;
+        retryCount = 0;
+    }
+}
+
+function cleanupSubtitle() {
+    if (subtitleDiv) { subtitleDiv.remove(); subtitleDiv = null; }
+    if (osdElement) { osdElement.remove(); osdElement = null; }
+
     if (videoElement) {
         videoElement.removeEventListener('timeupdate', updateOverlayPosition);
         videoElement.removeEventListener('timeupdate', onVideoTimeUpdate);
@@ -224,16 +241,9 @@ function initializeSubtitleOverlay(subtitleData) {
         isPageInitialized = false;
         retryCount = 0;
 
-        // Clean up any previous UI
-        cleanupUI();
-
-        // Start looking for video
+        cleanupSubtitle();
         attemptSetup();
-
-        // Set up mutation observer to detect video changes
         setupMutationObserver();
-
-        // Set up URL change observer for SPA navigation
         setupUrlObserver();
 
     } catch (error) {
@@ -242,28 +252,22 @@ function initializeSubtitleOverlay(subtitleData) {
     }
 }
 
-// Main setup attempt
 function attemptSetup() {
     if (currentSubtitles.length === 0) {
         cleanupUI();
         return;
     }
 
-    // If already initialized and video still exists and is visible, keep it
     if (isPageInitialized && videoElement && document.body.contains(videoElement)) {
-        // Check if video still has a source (maybe changed)
         if (videoElement.src || videoElement.querySelector('source')) {
-            return; // all good
+            return;
         } else {
-            // video lost source, re-initialize
-            cleanupUI();
+            cleanupSubtitle();
         }
     }
 
-    // Find a suitable video
     const video = findBestVideo();
     if (video) {
-        // Found a video
         videoElement = video;
         isPageInitialized = true;
         retryCount = 0;
@@ -272,7 +276,6 @@ function attemptSetup() {
             retryTimer = null;
         }
 
-        // Create UI elements
         createSubtitleOverlay(video);
         if (!controlBar) {
             createControlBar(video);
@@ -280,15 +283,13 @@ function attemptSetup() {
 
         showOSD(`Loaded: ${currentMovieName}`);
     } else {
-        // No video found – schedule retry
         if (retryCount < MAX_RETRIES) {
             retryCount++;
             if (retryTimer) clearTimeout(retryTimer);
             retryTimer = setTimeout(attemptSetup, RETRY_DELAY_MS);
         } else {
-            // Max retries reached: clean up silently (NO annoying error message)
-            cleanupUI();
-            // showOSD('No video element found on this page'); // REMOVED
+            cleanupSubtitle();
+            console.log('[Vortext] Could not find a valid video element after retries.');
         }
     }
 }
@@ -300,7 +301,6 @@ function findBestVideo() {
         const isLarge = rect.width > 50 && rect.height > 50;
         const style = window.getComputedStyle(video);
         const isVisible = style.display !== 'none' && style.visibility !== 'hidden';
-        // Only require src or source child – no readyState check
         const hasSource = video.src || video.querySelector('source');
 
         if (isLarge && isVisible && hasSource) {
@@ -308,7 +308,6 @@ function findBestVideo() {
         }
     }
 
-    // Also check iframes
     const iframes = document.querySelectorAll('iframe');
     for (let iframe of iframes) {
         try {
@@ -338,7 +337,6 @@ function setupMutationObserver() {
         let shouldRecheck = false;
         for (let mutation of mutations) {
             if (mutation.type === 'childList') {
-                // check if any video added or removed
                 const addedVideo = Array.from(mutation.addedNodes).some(node => node.tagName === 'VIDEO');
                 const removedVideo = Array.from(mutation.removedNodes).some(node => node.tagName === 'VIDEO');
                 if (addedVideo || removedVideo) {
@@ -347,16 +345,13 @@ function setupMutationObserver() {
                 }
             }
             if (mutation.type === 'attributes' && mutation.target.tagName === 'VIDEO') {
-                // src, readyState, or style changed
                 shouldRecheck = true;
                 break;
             }
         }
 
         if (shouldRecheck) {
-            // If video changed, reset and try again
             if (isPageInitialized) {
-                // If we had a video but it was removed or changed, clean up and re-attempt
                 cleanupUI();
             }
             retryCount = 0;
@@ -382,7 +377,6 @@ function setupUrlObserver() {
         const url = location.href;
         if (url !== lastUrl) {
             lastUrl = url;
-            // URL changed – re-evaluate video
             if (isPageInitialized) {
                 cleanupUI();
             }
@@ -428,125 +422,80 @@ function createSubtitleOverlay(video) {
     `;
 
     applySettings();
-    // Restore saved position if exists
-    chrome.storage.local.get('subtitlePosition', function(data) {
-    if (data.subtitlePosition && 
-        data.subtitlePosition.movieName === currentMovieName &&
-        data.subtitlePosition.isAbsolute) {
-        
-        const videoRect = videoElement.getBoundingClientRect();
-        const absoluteX = videoRect.left + (videoRect.width * (data.subtitlePosition.x / 100));
-        const absoluteY = videoRect.top + (videoRect.height * (data.subtitlePosition.y / 100));
-        
-        subtitleDiv.style.left = `${absoluteX}px`;
-        subtitleDiv.style.top = `${absoluteY}px`;
-        subtitleDiv.style.bottom = 'auto';
-        subtitleDiv.style.transform = 'none';
-        subtitleDiv.dataset.manuallyPositioned = 'true';
-    }
-});
     document.body.appendChild(subtitleDiv);
     updateOverlayPosition();
 
-    // Dragging logic
-let isDragging = false;
-let startX, startY, initialLeft, initialTop;
+    let isDragging = false;
+    let startX, startY, initialLeft, initialBottom;
 
-subtitleDiv.addEventListener('mousedown', (e) => {
-    isDragging = true;
-    subtitleDiv.dataset.isDragging = 'true';
-    startX = e.clientX;
-    startY = e.clientY;
-    
-    // Get current computed position
-    const rect = subtitleDiv.getBoundingClientRect();
-    initialLeft = rect.left;
-    initialTop = rect.top;
-    
-    subtitleDiv.style.transition = 'none';
-    subtitleDiv.style.cursor = 'grabbing';
-    subtitleDiv.dataset.manuallyPositioned = 'true';
-    e.preventDefault();
-});
+    subtitleDiv.addEventListener('mousedown', (e) => {
+        isDragging = true;
+        subtitleDiv.dataset.isDragging = 'true';
+        startX = e.clientX;
+        startY = e.clientY;
+        const rect = subtitleDiv.getBoundingClientRect();
+        initialLeft = rect.left;
+        initialBottom = window.innerHeight - rect.bottom;
+        subtitleDiv.style.transition = 'none';
+        subtitleDiv.style.cursor = 'grabbing';
+        e.preventDefault();
+    });
 
-document.addEventListener('mousemove', (e) => {
-    if (!isDragging) return;
-    
-    const deltaX = e.clientX - startX;
-    const deltaY = e.clientY - startY;
-    const newLeft = initialLeft + deltaX;
-    const newTop = initialTop + deltaY;
-    
-    // Keep subtitle within viewport bounds
-    const maxX = window.innerWidth - subtitleDiv.offsetWidth;
-    const maxY = window.innerHeight - subtitleDiv.offsetHeight;
-    
-    subtitleDiv.style.left = `${Math.max(0, Math.min(newLeft, maxX))}px`;
-    subtitleDiv.style.top = `${Math.max(0, Math.min(newTop, maxY))}px`;
-    subtitleDiv.style.transform = 'none'; // Remove centering transform
-    subtitleDiv.style.bottom = 'auto'; // Clear bottom positioning
-});
+    document.addEventListener('mousemove', (e) => {
+        if (!isDragging) return;
+        const deltaX = e.clientX - startX;
+        const deltaY = e.clientY - startY;
+        const newLeft = initialLeft + deltaX;
+        const newBottom = initialBottom - deltaY;
 
-document.addEventListener('mouseup', () => {
-    if (isDragging) {
-        isDragging = false;
-        subtitleDiv.dataset.isDragging = 'false';
-        subtitleDiv.style.cursor = 'move';
-        
-        // Save position relative to video
-        if (videoElement) {
+        subtitleDiv.style.left = `${newLeft + (subtitleDiv.offsetWidth / 2)}px`;
+        subtitleDiv.style.transform = 'translateX(-50%)';
+        subtitleDiv.style.bottom = `${newBottom}px`;
+        subtitleDiv.dataset.manuallyPositioned = 'true';
+    });
+
+    document.addEventListener('mouseup', () => {
+        if (isDragging) {
+            isDragging = false;
+            subtitleDiv.dataset.isDragging = 'false';
+            subtitleDiv.style.cursor = 'move';
+
             const rect = subtitleDiv.getBoundingClientRect();
             const videoRect = videoElement.getBoundingClientRect();
-            
-            const relativeX = ((rect.left - videoRect.left) / videoRect.width) * 200;
-            const relativeY = ((rect.top - videoRect.top) / videoRect.height) * 200;
-            
             chrome.storage.local.set({
                 subtitlePosition: {
-                    x: relativeX,
-                    y: relativeY,
-                    movieName: currentMovieName,
-                    isAbsolute: true // Mark as absolute positioning
+                    x: ((rect.left - videoRect.left) / videoRect.width) * 100,
+                    y: ((window.innerHeight - rect.bottom) / videoRect.height) * 100,
+                    movieName: currentMovieName
                 }
             });
         }
-    }
-});
+    });
 
-    // Attach timeupdate listeners
     video.addEventListener('timeupdate', updateOverlayPosition);
     video.addEventListener('timeupdate', onVideoTimeUpdate);
 
-    // Fullscreen handling
     function handleFullscreenChange() {
-    if (!subtitleDiv) return;
-    const fullscreenElement = document.fullscreenElement ||
-                              document.webkitFullscreenElement ||
-                              document.mozFullScreenElement ||
-                              document.msFullscreenElement;
+        if (!subtitleDiv) return;
+        const fullscreenElement = document.fullscreenElement ||
+                                  document.webkitFullscreenElement ||
+                                  document.mozFullScreenElement ||
+                                  document.msFullscreenElement;
 
-    if (fullscreenElement) {
-        fullscreenElement.appendChild(subtitleDiv);
-        subtitleDiv.style.position = 'absolute';
-        subtitleDiv.style.bottom = '60px';
-        subtitleDiv.style.left = '50%';
-        subtitleDiv.style.transform = 'translateX(-50%)';
-        subtitleDiv.style.top = 'auto';
-        subtitleDiv.style.maxWidth = '90%';
-        subtitleDiv.style.width = 'auto';
-        // Reset manual positioning in fullscreen
-        subtitleDiv.dataset.manuallyPositioned = 'false';
-    } else {
-        document.body.appendChild(subtitleDiv);
-        subtitleDiv.style.position = 'fixed';
-        // Restore manual positioning if it was set
-        if (subtitleDiv.dataset.manuallyPositioned === 'true') {
-            // Position will be restored by updateOverlayPosition
+        if (fullscreenElement) {
+            fullscreenElement.appendChild(subtitleDiv);
+            subtitleDiv.style.position = 'absolute';
+            subtitleDiv.style.bottom = '60px';
+            subtitleDiv.style.left = '50%';
+            subtitleDiv.style.transform = 'translateX(-50%)';
+            subtitleDiv.style.maxWidth = '90%';
+            subtitleDiv.style.width = 'auto';
         } else {
+            document.body.appendChild(subtitleDiv);
+            subtitleDiv.style.position = 'fixed';
             setTimeout(updateOverlayPosition, 100);
         }
     }
-}
 
     document.addEventListener('fullscreenchange', handleFullscreenChange);
     document.addEventListener('webkitfullscreenchange', handleFullscreenChange);
@@ -556,7 +505,6 @@ document.addEventListener('mouseup', () => {
     video.addEventListener('ended', () => { subtitleDiv.style.display = 'none'; });
 }
 
-// Separate handler for subtitle display
 function onVideoTimeUpdate() {
     if (!videoElement || !subtitleDiv) return;
     const adjustedTime = videoElement.currentTime + userSettings.syncOffset;
@@ -572,9 +520,6 @@ function onVideoTimeUpdate() {
     }
 }
 
-//========================================== PREVIOUS updateOverlayPosition
-
-/*
 function updateOverlayPosition() {
     if (!videoElement || !subtitleDiv) return;
     if (subtitleDiv.dataset.isDragging === 'true') return;
@@ -602,32 +547,6 @@ function updateOverlayPosition() {
     }
 }
 
-*/
-
-function updateOverlayPosition() {
-    if (!videoElement || !subtitleDiv) return;
-    
-    // NEVER update position if user manually positioned it
-    if (subtitleDiv.dataset.manuallyPositioned === 'true') {
-        return;
-    }
-    
-    const rect = videoElement.getBoundingClientRect();
-    const viewportHeight = window.innerHeight;
-    const fullscreenElement = document.fullscreenElement || document.webkitFullscreenElement;
-    
-    if (fullscreenElement) return;
-    
-    // Default positioning (centered at bottom)
-    const bottomOffset = Math.max(60, viewportHeight - rect.bottom);
-    subtitleDiv.style.bottom = `${bottomOffset}px`;
-    subtitleDiv.style.left = `${rect.left + (rect.width / 2)}px`;
-    subtitleDiv.style.transform = 'translateX(-50%)';
-    subtitleDiv.style.top = 'auto';
-}
-
-
-
 function applySettings() {
     if (!subtitleDiv) return;
     subtitleDiv.style.color = userSettings.textColor;
@@ -653,54 +572,6 @@ function applySettings() {
 // ==========================================
 // 8. UI COMPONENTS (Control Bar & Settings)
 // ==========================================
-/*
-function createControlBar(video) {
-    if (controlBar) return;
-
-    controlBar = document.createElement('div');
-    controlBar.id = 'vortext-control-bar';
-    controlBar.style.cssText = `
-        position: fixed; top: 10px; right: 10px; display: flex; gap: 8px;
-        z-index: 2147483647; background: rgba(0, 0, 0, 0.7); padding: 8px;
-        border-radius: 6px; backdrop-filter: blur(4px); font-family: Arial, sans-serif;
-    `;
-
-    const settingsBtn = document.createElement('button');
-    settingsBtn.innerHTML = '⚙️';
-    settingsBtn.style.cssText = `
-        background: transparent; border: none; color: white; font-size: 20px;
-        cursor: pointer; padding: 4px 8px; border-radius: 4px; transition: all 0.2s;
-    `;
-    settingsBtn.onmouseenter = () => settingsBtn.style.background = 'rgba(255,255,255,0.1)';
-    settingsBtn.onmouseleave = () => settingsBtn.style.background = 'transparent';
-    settingsBtn.onclick = () => toggleSettingsPanel();
-
-    const toggleBtn = document.createElement('button');
-    toggleBtn.textContent = userSettings.isOverlayVisible ? 'ON' : 'OFF';
-    toggleBtn.style.cssText = `
-        background: ${userSettings.isOverlayVisible ? '#00d9ff' : '#555'};
-        border: none; color: ${userSettings.isOverlayVisible ? '#1a1a2e' : '#aaa'};
-        font-weight: bold; font-size: 12px; cursor: pointer; padding: 6px 12px;
-        border-radius: 4px; min-width: 50px; transition: all 0.2s;
-    `;
-    toggleBtn.onclick = () => {
-        userSettings.isOverlayVisible = !userSettings.isOverlayVisible;
-        toggleBtn.textContent = userSettings.isOverlayVisible ? 'ON' : 'OFF';
-        toggleBtn.style.background = userSettings.isOverlayVisible ? '#00d9ff' : '#555';
-        toggleBtn.style.color = userSettings.isOverlayVisible ? '#1a1a2e' : '#aaa';
-        saveSettings();
-        if (subtitleDiv) subtitleDiv.style.display = userSettings.isOverlayVisible ? 'block' : 'none';
-        showOSD(userSettings.isOverlayVisible ? 'Subtitles ON' : 'Subtitles OFF');
-    };
-
-    controlBar.appendChild(settingsBtn);
-    controlBar.appendChild(toggleBtn);
-    document.body.appendChild(controlBar);
-}
- 
-*/
-
-
 function createControlBar(video) {
     if (controlBar) return;
 
@@ -718,30 +589,43 @@ function createControlBar(video) {
         border-radius: 6px; 
         backdrop-filter: blur(4px); 
         font-family: Arial, sans-serif;
-        cursor: move;
+        cursor: grab;
         user-select: none;
+        will-change: transform;
+        transition: transform 0.2s ease;
     `;
 
-    // Restore saved position
+    // Restore saved position with safety check
     chrome.storage.local.get('controlBarPosition', function(data) {
         if (data.controlBarPosition) {
-            controlBar.style.left = `${data.controlBarPosition.x}px`;
-            controlBar.style.top = `${data.controlBarPosition.y}px`;
-            controlBar.style.right = 'auto'; // Clear the default right positioning
+            // Safety check: ensure position is within visible window
+            const maxX = window.innerWidth - 100;
+            const maxY = window.innerHeight - 50;
+            
+            let savedX = Math.min(data.controlBarPosition.x, maxX);
+            let savedY = Math.min(data.controlBarPosition.y, maxY);
+            
+            // Ensure it's not off-screen
+            savedX = Math.max(0, savedX);
+            savedY = Math.max(0, savedY);
+            
+            controlBar.style.left = `${savedX}px`;
+            controlBar.style.top = `${savedY}px`;
+            controlBar.style.right = 'auto'; 
         }
     });
 
     const settingsBtn = document.createElement('button');
-    settingsBtn.innerHTML = '️';
+    settingsBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>`;
     settingsBtn.style.cssText = `
-        background: transparent; border: none; color: white; font-size: 20px;
-        cursor: pointer; padding: 4px 8px; border-radius: 4px; transition: all 0.2s;
+        background: transparent; border: none; color: white; 
+        cursor: pointer; padding: 4px; border-radius: 4px; 
+        display: flex; align-items: center; justify-content: center;
+        transition: background 0.2s;
     `;
     settingsBtn.onmouseenter = () => settingsBtn.style.background = 'rgba(255,255,255,0.1)';
     settingsBtn.onmouseleave = () => settingsBtn.style.background = 'transparent';
-    settingsBtn.onclick = () => toggleSettingsPanel();
-    
-    // Prevent drag when clicking settings button
+    settingsBtn.onclick = (e) => { e.stopPropagation(); toggleSettingsPanel(); };
     settingsBtn.addEventListener('mousedown', (e) => e.stopPropagation());
 
     const toggleBtn = document.createElement('button');
@@ -752,7 +636,8 @@ function createControlBar(video) {
         font-weight: bold; font-size: 12px; cursor: pointer; padding: 6px 12px;
         border-radius: 4px; min-width: 50px; transition: all 0.2s;
     `;
-    toggleBtn.onclick = () => {
+    toggleBtn.onclick = (e) => {
+        e.stopPropagation();
         userSettings.isOverlayVisible = !userSettings.isOverlayVisible;
         toggleBtn.textContent = userSettings.isOverlayVisible ? 'ON' : 'OFF';
         toggleBtn.style.background = userSettings.isOverlayVisible ? '#00d9ff' : '#555';
@@ -761,28 +646,22 @@ function createControlBar(video) {
         if (subtitleDiv) subtitleDiv.style.display = userSettings.isOverlayVisible ? 'block' : 'none';
         showOSD(userSettings.isOverlayVisible ? 'Subtitles ON' : 'Subtitles OFF');
     };
-    
-    // Prevent drag when clicking toggle button
     toggleBtn.addEventListener('mousedown', (e) => e.stopPropagation());
 
     controlBar.appendChild(settingsBtn);
     controlBar.appendChild(toggleBtn);
     document.body.appendChild(controlBar);
 
-    // ===== DRAG FUNCTIONALITY =====
+    // ===== DRAG FUNCTIONALITY WITH BOUNDS CHECKING =====
     let isDragging = false;
-    let startX, startY, initialLeft, initialTop;
+    let startX, startY;
 
     controlBar.addEventListener('mousedown', (e) => {
         isDragging = true;
         startX = e.clientX;
         startY = e.clientY;
-        
-        const rect = controlBar.getBoundingClientRect();
-        initialLeft = rect.left;
-        initialTop = rect.top;
-        
         controlBar.style.cursor = 'grabbing';
+        controlBar.style.transition = 'none';
         e.preventDefault();
     });
 
@@ -791,24 +670,42 @@ function createControlBar(video) {
         
         const deltaX = e.clientX - startX;
         const deltaY = e.clientY - startY;
-        const newLeft = initialLeft + deltaX;
-        const newTop = initialTop + deltaY;
         
-        // Keep within viewport bounds
+        // Get current position
+        const rect = controlBar.getBoundingClientRect();
+        const currentLeft = rect.left;
+        const currentTop = rect.top;
+        
+        // Calculate new position
+        let newLeft = currentLeft + deltaX;
+        let newTop = currentTop + deltaY;
+        
+        // CONSTRAINTS: Keep within window bounds
         const maxX = window.innerWidth - controlBar.offsetWidth;
         const maxY = window.innerHeight - controlBar.offsetHeight;
         
-        controlBar.style.left = `${Math.max(0, Math.min(newLeft, maxX))}px`;
-        controlBar.style.top = `${Math.max(0, Math.min(newTop, maxY))}px`;
+        // Clamp values to stay within bounds
+        newLeft = Math.max(0, Math.min(newLeft, maxX));
+        newTop = Math.max(0, Math.min(newTop, maxY));
+        
+        // Apply position
+        controlBar.style.left = `${newLeft}px`;
+        controlBar.style.top = `${newTop}px`;
         controlBar.style.right = 'auto';
+        controlBar.style.transform = 'none';
+        
+        // Reset start position for next frame
+        startX = e.clientX;
+        startY = e.clientY;
     });
 
     document.addEventListener('mouseup', () => {
         if (isDragging) {
             isDragging = false;
-            controlBar.style.cursor = 'move';
+            controlBar.style.cursor = 'grab';
+            controlBar.style.transition = 'transform 0.2s ease';
             
-            // Save position
+            // Save final position
             const rect = controlBar.getBoundingClientRect();
             chrome.storage.local.set({
                 controlBarPosition: {
@@ -818,17 +715,19 @@ function createControlBar(video) {
             });
         }
     });
-}
-
-// Optional: Add a function to reset control bar position
-
-function resetControlBarPosition() {
-    if (controlBar) {
-        controlBar.style.left = 'auto';
-        controlBar.style.top = '10px';
-        controlBar.style.right = '10px';
-        chrome.storage.local.remove('controlBarPosition');
-    }
+    
+    // Add double-click to reset position
+    controlBar.addEventListener('dblclick', (e) => {
+        // Only reset if clicking on the bar itself, not buttons
+        if (e.target === controlBar) {
+            controlBar.style.left = 'auto';
+            controlBar.style.top = '10px';
+            controlBar.style.right = '10px';
+            controlBar.style.transform = 'none';
+            chrome.storage.local.remove('controlBarPosition');
+            showOSD('Control Bar Reset');
+        }
+    });
 }
 
 function createSettingsPanel() {
@@ -847,7 +746,7 @@ function createSettingsPanel() {
 
     settingsPanel.innerHTML = `
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; border-bottom: 1px solid #0f3460; padding-bottom: 15px;">
-            <h2 style="color: #00d9ff; margin: 0; font-size: 20px;">⚙️ Settings</h2>
+            <h2 style="color: #00d9ff; margin: 0; font-size: 20px;">️ Settings</h2>
             <button id="closeSettings" style="background: transparent; border: none; color: white; font-size: 24px; cursor: pointer;">&times;</button>
         </div>
         <div style="margin-bottom: 20px;">
@@ -982,6 +881,10 @@ function showOSD(message, duration = 1500) {
     if (currentSubtitles.length === 0 && !message.includes('Error')) {
         return;
     }
+    
+    if (message.includes('Loaded:') && !videoElement) {
+        return;
+    }
 
     if (osdElement) {
         osdElement.remove();
@@ -1092,9 +995,8 @@ document.addEventListener('keydown', function (e) {
 // ==========================================
 document.addEventListener('visibilitychange', function() {
     if (document.hidden) {
-        // Optionally pause or do nothing; but do not clean up
+        // Do nothing
     } else {
-        // Page became visible again – re-check video if not initialized
         if (currentSubtitles.length > 0 && !isPageInitialized) {
             retryCount = 0;
             if (retryTimer) {
