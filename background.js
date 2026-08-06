@@ -3,7 +3,7 @@
 // ==========================================
 
 
-const API_KEY = 'up_here'; // Default value, will be overridden 
+const API_KEY = 'nothing_up'; // Default value, will be overridden 
 
 console.log('[Vortext Background] API Key loaded:', API_KEY ? 'YES' : 'NO');
 

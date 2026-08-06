@@ -417,7 +417,7 @@ function createSubtitleOverlay(video) {
         bottom: 60px;
         cursor: move;
         user-select: none;
-        transition: none;
+        transition: opacity 0.3 ease;
         background-color: ${userSettings.bgColor};
     `;
 
@@ -514,12 +514,16 @@ function onVideoTimeUpdate() {
 
     if (activeSubtitle && userSettings.isOverlayVisible) {
         subtitleDiv.textContent = activeSubtitle.text;
-        subtitleDiv.style.display = 'block';
+        // Smooth fade in
+        subtitleDiv.style.opacity = '1';
+        subtitleDiv.style.pointerEvents = 'auto';
     } else {
-        subtitleDiv.style.display = 'none';
+        // Smooth fade out
+        subtitleDiv.style.opacity = '0';
+        subtitleDiv.style.pointerEvents = 'none';
     }
 }
-
+ 
 function updateOverlayPosition() {
     if (!videoElement || !subtitleDiv) return;
     if (subtitleDiv.dataset.isDragging === 'true') return;
@@ -728,6 +732,34 @@ function createControlBar(video) {
             showOSD('Control Bar Reset');
         }
     });
+
+    /*   
+    // ===== AUTO-HIDE FEATURE ===== (control bar will disappear after 3 seconds of inactivity)
+    let hideTimer = null;
+    
+    function showControlBar() {
+        controlBar.style.opacity = '1';
+        controlBar.style.pointerEvents = 'auto';
+        clearTimeout(hideTimer);
+        hideTimer = setTimeout(() => {
+            controlBar.style.opacity = '0';
+            controlBar.style.pointerEvents = 'none';
+        }, 3000); // Hides after 3 seconds
+    }
+
+    // Add transition for smooth hide/show
+    controlBar.style.transition = 'opacity 0.3s ease, transform 0.2s ease';
+    
+    // Start the timer
+    showControlBar();
+
+    // Show on mouse move
+    document.addEventListener('mousemove', () => {
+        // Only trigger if mouse is near the top right (optional, but good for UX)
+        // For now, we show it on any mouse move for simplicity
+        showControlBar();
+    });
+ */
 }
 
 function createSettingsPanel() {
